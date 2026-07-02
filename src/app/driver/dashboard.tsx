@@ -1,76 +1,103 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import { useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  FlatList,
-  Dimensions,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ActivityIndicator,
   Appearance,
+  FlatList,
+  Image,
   Linking,
   Platform,
-  useColorScheme,
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { WebView } from 'react-native-webview';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View
+} from "react-native";
 import Animated, {
-  FadeIn,
-  FadeInDown,
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withSpring,
-  withRepeat,
   Easing,
-  interpolate,
-} from 'react-native-reanimated';
+  FadeInDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming
+} from "react-native-reanimated";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 
-// ============================================================
-// KAYORA BRAND TOKENS
-// ============================================================
+/* ============================================================
+   BRAND COLORS
+============================================================ */
 const BRAND = {
-  primary: '#0D4A8C',
-  secondary: '#1E5FAF',
-  gold: '#D4A64A',
-  bg: '#FFFFFF',
-  bgDark: '#071D38',
-  card: '#F8FAFC',
-  cardDark: '#102E56',
-  border: '#E5E7EB',
-  borderDark: '#1C3A5E',
-  text: '#1F2937',
-  textDark: '#F1F5F9',
-  muted: '#6B7280',
-  mutedDark: '#93A5BD',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#EF4444',
+  primary: "#0D4A8C",
+  secondary: "#1E5FAF",
+  gold: "#D4A64A",
+  background: "#FFFFFF",
+  backgroundDark: "#071D38",
+  card: "#F8FAFC",
+  cardDark: "#102E56",
+  border: "#E5E7EB",
+  borderDark: "#1C3A5E",
+  text: "#1F2937",
+  textDark: "#F1F5F9",
+  muted: "#6B7280",
+  mutedDark: "#93A4BC",
+  success: "#22C55E",
+  warning: "#F59E0B",
+  danger: "#EF4444",
 };
 
-type ThemeMode = 'light' | 'dark' | 'system';
+type ThemeMode = "light" | "dark" | "system";
+type Scheme = "light" | "dark";
 
-const THEME_STORAGE_KEY = '@kayora_driver_theme_mode';
+function getPalette(scheme: Scheme) {
+  const isDark = scheme === "dark";
+  return {
+    scheme,
+    background: isDark ? BRAND.backgroundDark : BRAND.background,
+    card: isDark ? BRAND.cardDark : BRAND.card,
+    border: isDark ? BRAND.borderDark : BRAND.border,
+    text: isDark ? BRAND.textDark : BRAND.text,
+    muted: isDark ? BRAND.mutedDark : BRAND.muted,
+    primary: BRAND.primary,
+    secondary: BRAND.secondary,
+    gold: BRAND.gold,
+    success: BRAND.success,
+    warning: BRAND.warning,
+    danger: BRAND.danger,
+    headerBg: isDark ? "#0A2645" : BRAND.background,
+    pillBg: isDark ? "#12335C" : "#EEF3FA",
+  };
+}
 
-// ============================================================
-// DEMO DATA
-// ============================================================
+const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
+
+/* ============================================================
+   DEMO DATA
+============================================================ */
 const DEMO_DRIVER = {
-  name: 'John Sunday',
-  phone: '+2348012345678',
-  driverId: 'DRV-0001',
-  vehicle: 'Kayora Delivery Van',
-  plate: 'AKD-245-KY',
+  name: "John Sunday",
+  phone: "+2348012345678",
+  driverId: "DRV-0001",
+  vehicle: "Kayora Delivery Van",
+  plate: "AKD-245-KY",
   profilePicture: null as string | null,
 };
 
-type TaskPriority = 'High' | 'Medium' | 'Low';
-type TaskStatus = 'Assigned' | 'In Progress' | 'Picked Up';
+type TaskPriority = "High" | "Medium" | "Low";
+type TaskStatus = "Assigned" | "In Progress" | "Completed";
 
 interface DemoTask {
   id: string;
@@ -82,7 +109,7 @@ interface DemoTask {
   quantity: string;
   status: TaskStatus;
   priority: TaskPriority;
-  distance: string;
+  distanceKm: number;
   eta: string;
   lat: number;
   lng: number;
@@ -90,96 +117,116 @@ interface DemoTask {
 
 const DEMO_TASKS: DemoTask[] = [
   {
-    id: 'KYR-1042',
-    customerName: 'Amaka Obi',
+    id: "TASK-1001",
+    customerName: "Amaka Obi",
     customerPicture: null,
-    phone: '+2348023456789',
-    address: '14 Airport Road, Benin City',
-    bottleName: '30cl Sharp-Sharp',
-    quantity: '20 Packs',
-    status: 'Assigned',
-    priority: 'High',
-    distance: '5.4 km',
-    eta: '12:30 PM',
-    lat: 6.3350,
+    phone: "+2348023456789",
+    address: "12 Sapele Road, Benin City",
+    bottleName: "30cl Sharp-Sharp",
+    quantity: "20 Packs",
+    status: "Assigned",
+    priority: "High",
+    distanceKm: 5.4,
+    eta: "12:30 PM",
+    lat: 6.339,
+    lng: 5.6216,
+  },
+  {
+    id: "TASK-1002",
+    customerName: "Emeka Nwosu",
+    customerPicture: null,
+    phone: "+2348034567890",
+    address: "45 Airport Road, Benin City",
+    bottleName: "50cl Kayora Table Water",
+    quantity: "12 Packs",
+    status: "Assigned",
+    priority: "Medium",
+    distanceKm: 3.1,
+    eta: "1:05 PM",
+    lat: 6.3423,
+    lng: 5.6109,
+  },
+  {
+    id: "TASK-1003",
+    customerName: "Grace Idahosa",
+    customerPicture: null,
+    phone: "+2348045678901",
+    address: "7 Ring Road, Benin City",
+    bottleName: "75cl Sharp-Sharp",
+    quantity: "8 Packs",
+    status: "In Progress",
+    priority: "Low",
+    distanceKm: 1.8,
+    eta: "1:40 PM",
+    lat: 6.3355,
     lng: 5.6037,
-  },
-  {
-    id: 'KYR-1043',
-    customerName: 'Tunde Bakare',
-    customerPicture: null,
-    phone: '+2348034567891',
-    address: '9 Sapele Road, Benin City',
-    bottleName: '50cl Kayora Table Water',
-    quantity: '12 Packs',
-    status: 'In Progress',
-    priority: 'Medium',
-    distance: '2.1 km',
-    eta: '1:05 PM',
-    lat: 6.3400,
-    lng: 5.6150,
-  },
-  {
-    id: 'KYR-1044',
-    customerName: 'Grace Eze',
-    customerPicture: null,
-    phone: '+2348045678912',
-    address: '22 Ring Road, Benin City',
-    bottleName: '75cl Sharp-Sharp',
-    quantity: '8 Packs',
-    status: 'Assigned',
-    priority: 'Low',
-    distance: '7.8 km',
-    eta: '1:45 PM',
-    lat: 6.3280,
-    lng: 5.5950,
   },
 ];
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+/* ============================================================
+   TOP NAV TABS
+============================================================ */
+const TOP_TABS = [
+  { key: "orders", label: "My Orders", route: "/driver/orders" as const },
+  { key: "tasks", label: "My Tasks", route: "/driver/tasks" as const },
+  { key: "account", label: "My Account", route: "/driver/account" as const },
+];
 
-// ============================================================
-// HELPERS
-// ============================================================
-function getAvailability() {
-  const hour = new Date().getHours();
-  const available = hour >= 7 && hour < 17;
-  return {
-    available,
-    label: available ? 'Driver is Available' : 'Off Duty',
-  };
-}
+/* ============================================================
+   BOTTOM NAV TABS
+============================================================ */
+const BOTTOM_TABS = [
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    icon: "car-sport",
+    route: "/driver/dashboard" as const,
+  },
+  {
+    key: "orders",
+    label: "Orders",
+    icon: "receipt-outline",
+    route: "/driver/orders" as const,
+  },
+  {
+    key: "tasks",
+    label: "Tasks",
+    icon: "list-outline",
+    route: "/driver/tasks" as const,
+  },
+  {
+    key: "account",
+    label: "Account",
+    icon: "person-outline",
+    route: "/driver/account" as const,
+  },
+];
 
-function priorityColor(priority: TaskPriority) {
-  if (priority === 'High') return BRAND.danger;
-  if (priority === 'Medium') return BRAND.warning;
-  return BRAND.success;
-}
+/* ============================================================
+   FALLBACK LOCATION (Benin City) - used if GPS unavailable
+============================================================ */
+const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
 
-function statusColor(status: TaskStatus) {
-  if (status === 'Assigned') return BRAND.secondary;
-  if (status === 'In Progress') return BRAND.warning;
-  return BRAND.success;
-}
+/* ============================================================
+   LEAFLET HTML BUILDER
+============================================================ */
+function buildLeafletHtml(lat: number, lng: number, isDark: boolean) {
+  const tileUrl = isDark
+    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
-function buildMapHtml(lat: number, lng: number) {
-  return `
-<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html, body, #map { height: 100%; margin: 0; padding: 0; background: #102E56; }
-    .kayora-pulse {
-      width: 18px; height: 18px; border-radius: 9px; background: #1E5FAF;
-      border: 3px solid #ffffff; box-shadow: 0 0 0 rgba(30,95,175,0.6);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(30,95,175,0.55); }
-      70% { box-shadow: 0 0 0 16px rgba(30,95,175,0); }
-      100% { box-shadow: 0 0 0 0 rgba(30,95,175,0); }
+    html, body, #map { height: 100%; margin: 0; padding: 0; background: ${isDark ? "#102E56" : "#F8FAFC"}; }
+    .leaflet-control-attribution { font-size: 9px; }
+    .kayora-marker {
+      width: 20px; height: 20px; border-radius: 10px;
+      background: #0D4A8C; border: 3px solid #FFFFFF;
+      box-shadow: 0 0 0 4px rgba(13,74,140,0.25);
     }
   </style>
 </head>
@@ -188,755 +235,1232 @@ function buildMapHtml(lat: number, lng: number) {
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([${lat}, ${lng}], 15);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('${tileUrl}', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    var icon = L.divIcon({ className: 'kayora-pulse', iconSize: [18, 18] });
+    var icon = L.divIcon({ className: 'kayora-marker', iconSize: [20, 20] });
     var marker = L.marker([${lat}, ${lng}], { icon: icon }).addTo(map);
 
-    function moveMarker(lat, lng) {
-      marker.setLatLng([lat, lng]);
-      map.panTo([lat, lng], { animate: true, duration: 1 });
+    function updateMarker(lat, lng) {
+      var newLatLng = new L.LatLng(lat, lng);
+      marker.setLatLng(newLatLng);
+      map.panTo(newLatLng, { animate: true, duration: 1.2 });
     }
 
-    document.addEventListener('message', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        if (data.type === 'update' ) { moveMarker(data.lat, data.lng); }
-      } catch (err) {}
-    });
-    window.addEventListener('message', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        if (data.type === 'update') { moveMarker(data.lat, data.lng); }
-      } catch (err) {}
-    });
+    true;
   </script>
 </body>
 </html>`;
 }
 
-// ============================================================
-// MAIN COMPONENT
-// ============================================================
-export default function DriverDashboard() {
-  const router = useRouter();
-  const systemScheme = useColorScheme();
-  const insets = useSafeAreaInsets();
-  const webviewRef = useRef<WebView>(null);
+/* ============================================================
+   HEADER
+============================================================ */
+function DashboardHeader({
+  palette,
+  themeMode,
+  onCycleTheme,
+  onOpenNotifications,
+  onOpenProfile,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  themeMode: ThemeMode;
+  onCycleTheme: () => void;
+  onOpenNotifications: () => void;
+  onOpenProfile: () => void;
+}) {
+  const themeIcon =
+    themeMode === "light"
+      ? "sunny-outline"
+      : themeMode === "dark"
+        ? "moon-outline"
+        : "contrast-outline";
 
-  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
-  const [activeTab, setActiveTab] = useState<'orders' | 'tasks' | 'account'>('orders');
-  const [coords, setCoords] = useState({ lat: 6.335, lng: 5.6037 });
-  const [mapReady, setMapReady] = useState(false);
-  const [availability, setAvailability] = useState(getAvailability());
+  const initial = DEMO_DRIVER.name.trim().charAt(0).toUpperCase();
 
-  // ---------- Theme persistence ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem(THEME_STORAGE_KEY);
-        if (saved === 'light' || saved === 'dark' || saved === 'system') {
-          setThemeMode(saved);
-        }
-      } catch (e) {
-        // ignore, default to system
-      }
-    })();
-  }, []);
+  return (
+    <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
+      <View style={styles.headerLeft}>
+        <View style={[styles.logoBadge, { backgroundColor: palette.primary }]}>
+          <Text style={styles.logoBadgeText}>K</Text>
+        </View>
+        <Text style={[styles.headerBrand, { color: palette.text }]}>
+          Kayora <Text style={{ color: palette.primary }}>Driver</Text>
+        </Text>
+      </View>
 
-  const cycleTheme = useCallback(async () => {
-    setThemeMode((prev) => {
-      const next: ThemeMode = prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light';
-      AsyncStorage.setItem(THEME_STORAGE_KEY, next).catch(() => {});
-      return next;
-    });
-  }, []);
+      <View style={styles.headerRight}>
+        <Pressable
+          onPress={onCycleTheme}
+          hitSlop={10}
+          style={[styles.iconButton, { backgroundColor: palette.pillBg }]}
+        >
+          <Ionicons name={themeIcon as any} size={18} color={palette.text} />
+        </Pressable>
 
-  const resolvedScheme = themeMode === 'system' ? systemScheme ?? 'light' : themeMode;
-  const isDark = resolvedScheme === 'dark';
+        <Pressable
+          onPress={onOpenNotifications}
+          hitSlop={10}
+          style={[styles.iconButton, { backgroundColor: palette.pillBg }]}
+        >
+          <Ionicons
+            name="notifications-outline"
+            size={18}
+            color={palette.text}
+          />
+          <View
+            style={[styles.notifDot, { backgroundColor: palette.danger }]}
+          />
+        </Pressable>
 
-  const palette = useMemo(
-    () => ({
-      bg: isDark ? BRAND.bgDark : BRAND.bg,
-      card: isDark ? BRAND.cardDark : BRAND.card,
-      border: isDark ? BRAND.borderDark : BRAND.border,
-      text: isDark ? BRAND.textDark : BRAND.text,
-      muted: isDark ? BRAND.mutedDark : BRAND.muted,
-    }),
-    [isDark]
+        <Pressable onPress={onOpenProfile} hitSlop={6}>
+          {DEMO_DRIVER.profilePicture ? (
+            <Image
+              source={{ uri: DEMO_DRIVER.profilePicture }}
+              style={styles.avatarImage}
+            />
+          ) : (
+            <View
+              style={[
+                styles.avatarFallback,
+                { backgroundColor: palette.secondary },
+              ]}
+            >
+              <Text style={styles.avatarFallbackText}>{initial}</Text>
+            </View>
+          )}
+        </Pressable>
+      </View>
+    </View>
   );
+}
 
-  // ---------- Availability clock ----------
+/* ============================================================
+   TOP TABS
+============================================================ */
+function TopTabsBar({
+  palette,
+  onNavigate,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  onNavigate: (route: string) => void;
+}) {
+  const [pressedKey, setPressedKey] = useState<string | null>(null);
+  const underlineX = useSharedValue(0);
+  const underlineWidth = useSharedValue(0);
+  const tabLayouts = useRef<Record<string, { x: number; width: number }>>({});
+
+  const handlePress = (key: string, route: string) => {
+    setPressedKey(key);
+    const layout = tabLayouts.current[key];
+    if (layout) {
+      underlineX.value = withTiming(layout.x, {
+        duration: 220,
+        easing: Easing.out(Easing.quad),
+      });
+      underlineWidth.value = withTiming(layout.width, {
+        duration: 220,
+        easing: Easing.out(Easing.quad),
+      });
+    }
+    setTimeout(() => onNavigate(route), 140);
+  };
+
+  const underlineStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: underlineX.value }],
+    width: underlineWidth.value,
+    opacity: underlineWidth.value > 0 ? 1 : 0,
+  }));
+
+  return (
+    <View style={styles.topTabsWrapper}>
+      <View style={styles.topTabsRow}>
+        {TOP_TABS.map((tab) => (
+          <Pressable
+            key={tab.key}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              tabLayouts.current[tab.key] = { x, width };
+            }}
+            onPress={() => handlePress(tab.key, tab.route)}
+            style={styles.topTabItem}
+          >
+            <Text
+              style={[
+                styles.topTabLabel,
+                {
+                  color:
+                    pressedKey === tab.key ? palette.primary : palette.muted,
+                },
+              ]}
+            >
+              {tab.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <View
+        style={[styles.topTabsBaseline, { backgroundColor: palette.border }]}
+      />
+      <Animated.View
+        style={[
+          styles.topTabsUnderline,
+          { backgroundColor: palette.primary },
+          underlineStyle,
+        ]}
+      />
+    </View>
+  );
+}
+
+/* ============================================================
+   WORK STATUS CARD (Automatic availability)
+============================================================ */
+function WorkStatusCard({
+  palette,
+}: {
+  palette: ReturnType<typeof getPalette>;
+}) {
+  const [isAvailable, setIsAvailable] = useState(() => {
+    const hour = new Date().getHours();
+    return hour >= 7 && hour < 17;
+  });
+
   useEffect(() => {
     const interval = setInterval(() => {
-      setAvailability(getAvailability());
+      const hour = new Date().getHours();
+      setIsAvailable(hour >= 7 && hour < 17);
     }, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // ---------- GPS + demo location updates ----------
+  const pulse = useSharedValue(1);
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({});
-          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        }
-      } catch (e) {
-        // keep default demo coords if permission denied / unavailable
-      }
-
-      intervalId = setInterval(() => {
-        setCoords((prev) => {
-          const jitterLat = prev.lat + (Math.random() - 0.5) * 0.0015;
-          const jitterLng = prev.lng + (Math.random() - 0.5) * 0.0015;
-          const next = { lat: jitterLat, lng: jitterLng };
-          const payload = JSON.stringify({ type: 'update', lat: next.lat, lng: next.lng });
-          webviewRef.current?.postMessage(payload);
-          return next;
-        });
-      }, 4000);
-    })();
-    return () => intervalId && clearInterval(intervalId);
+    pulse.value = withRepeat(
+      withSequence(
+        withTiming(1.6, { duration: 900, easing: Easing.out(Easing.quad) }),
+        withTiming(1, { duration: 0 }),
+      ),
+      -1,
+      false,
+    );
   }, []);
 
-  const mapHtml = useMemo(() => buildMapHtml(coords.lat, coords.lng), []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ---------- Animated tab underline ----------
-  const tabs = [
-    { key: 'orders', label: 'My Orders', route: '/driver/orders' },
-    { key: 'tasks', label: 'My Tasks', route: '/driver/tasks' },
-    { key: 'account', label: 'My Account', route: '/driver/account' },
-  ] as const;
-
-  const [tabLayouts, setTabLayouts] = useState<{ x: number; width: number }[]>([
-    { x: 0, width: 0 },
-    { x: 0, width: 0 },
-    { x: 0, width: 0 },
-  ]);
-
-  const underlineX = useSharedValue(0);
-  const underlineW = useSharedValue(0);
-
-  const underlineStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: underlineX.value }],
-    width: underlineW.value,
+  const pulseStyle = useAnimatedStyle(() => ({
+    opacity: 1 - (pulse.value - 1) / 0.6,
+    transform: [{ scale: pulse.value }],
   }));
 
-  const activeIndex = tabs.findIndex((t) => t.key === activeTab);
-
-  useEffect(() => {
-    const layout = tabLayouts[activeIndex];
-    if (layout && layout.width > 0) {
-      underlineX.value = withSpring(layout.x, { damping: 18, stiffness: 180 });
-      underlineW.value = withSpring(layout.width, { damping: 18, stiffness: 180 });
-    }
-  }, [activeIndex, tabLayouts]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const onTabPress = (key: typeof activeTab, route: string) => {
-    setActiveTab(key);
-    router.push(route as any);
-  };
-
-  // ---------- Map loading pulse ----------
-  const mapPulse = useSharedValue(0.4);
-  useEffect(() => {
-    mapPulse.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.inOut(Easing.ease) }), -1, true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const mapPulseStyle = useAnimatedStyle(() => ({ opacity: mapPulse.value }));
-
-  // ---------- Bottom nav ----------
-  const [bottomTab, setBottomTab] = useState<'dashboard' | 'orders' | 'tasks' | 'account'>('dashboard');
-  const bottomTabs = [
-    { key: 'dashboard', label: 'Dashboard', route: '/driver/dashboard', icon: 'car-sport' },
-    { key: 'orders', label: 'Orders', route: '/driver/orders', icon: 'receipt-outline' },
-    { key: 'tasks', label: 'Tasks', route: '/driver/tasks', icon: 'list-outline' },
-    { key: 'account', label: 'Account', route: '/driver/account', icon: 'person-outline' },
-  ] as const;
-
-  const onBottomTabPress = (key: typeof bottomTab, route: string) => {
-    setBottomTab(key);
-    router.push(route as any);
-  };
-
-  // ---------- Quick stats ----------
-  const completed = DEMO_TASKS.filter((t) => t.status === 'In Progress').length + 5;
-  const pending = DEMO_TASKS.filter((t) => t.status !== 'In Progress').length;
-  const distanceTravelled = '38.2 km';
-
-  const themeIcon = themeMode === 'light' ? 'sunny' : themeMode === 'dark' ? 'moon' : 'contrast';
+  const statusColor = isAvailable ? palette.success : palette.muted;
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.bg }]} edges={['top', 'left', 'right']}>
-      <ScrollView
-        style={{ backgroundColor: palette.bg }}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ---------------- HEADER ---------------- */}
-        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View style={styles.logoBadge}>
-              <MaterialCommunityIcons name="truck-delivery" size={20} color="#FFFFFF" />
-            </View>
-            <View>
-              <Text style={[styles.brandTitle, { color: palette.text }]}>
-                Kayora <Text style={{ color: BRAND.secondary }}>Driver</Text>
-              </Text>
-              <Text style={[styles.brandSubtitle, { color: palette.muted }]}>Delivery Partner</Text>
-            </View>
-          </View>
-
-          <View style={styles.headerRight}>
-            <TouchableOpacity
-              onPress={cycleTheme}
-              style={[styles.iconButton, { borderColor: palette.border, backgroundColor: palette.card }]}
-              activeOpacity={0.7}
-            >
-              <Ionicons name={themeIcon as any} size={18} color={palette.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.iconButton, { borderColor: palette.border, backgroundColor: palette.card }]}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="notifications-outline" size={18} color={palette.text} />
-              <View style={styles.notifDot} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => router.push('/driver/account' as any)}
-              activeOpacity={0.8}
-            >
-              {DEMO_DRIVER.profilePicture ? (
-                <Image source={{ uri: DEMO_DRIVER.profilePicture }} style={styles.avatarImage} />
-              ) : (
-                <View style={styles.avatarFallback}>
-                  <Text style={styles.avatarLetter}>{DEMO_DRIVER.name.charAt(0)}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-
-        {/* ---------------- TOP TABS ---------------- */}
-        <View style={[styles.tabsRow, { borderBottomColor: palette.border }]}>
-          {tabs.map((tab, index) => (
-            <TouchableOpacity
-              key={tab.key}
-              style={styles.tabItem}
-              activeOpacity={0.7}
-              onLayout={(e) => {
-                const { x, width } = e.nativeEvent.layout;
-                setTabLayouts((prev) => {
-                  const copy = [...prev];
-                  copy[index] = { x, width };
-                  return copy;
-                });
-              }}
-              onPress={() => onTabPress(tab.key, tab.route)}
-            >
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: activeTab === tab.key ? BRAND.primary : palette.muted },
-                  activeTab === tab.key && styles.tabLabelActive,
-                ]}
-              >
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          <Animated.View style={[styles.tabUnderline, underlineStyle]} />
-        </View>
-
-        {/* ---------------- WORK STATUS ---------------- */}
-        <Animated.View
-          entering={FadeInDown.duration(450).delay(80)}
-          style={[styles.statusCard, { backgroundColor: palette.card, borderColor: palette.border }]}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.statusTitle, { color: palette.text }]}>
-              {availability.label}
-            </Text>
-            <Text style={[styles.statusSubtitle, { color: palette.muted }]}>
-              Working hours: 7:00 AM – 5:00 PM · Automatic tracking
-            </Text>
-          </View>
-          <View style={styles.statusIndicatorWrap}>
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: availability.available ? BRAND.success : '#9CA3AF' },
-              ]}
-            />
-          </View>
-        </Animated.View>
-
-        {/* ---------------- LIVE MAP ---------------- */}
-        <Animated.View
-          entering={FadeInDown.duration(450).delay(140)}
-          style={[styles.mapCard, { borderColor: palette.border }]}
-        >
-          {!mapReady && (
-            <Animated.View style={[styles.mapLoading, mapPulseStyle]}>
-              <MaterialCommunityIcons name="map-marker-radius" size={32} color={BRAND.secondary} />
-              <Text style={styles.mapLoadingText}>Locating you…</Text>
-            </Animated.View>
-          )}
-          <WebView
-            ref={webviewRef}
-            originWhitelist={['*']}
-            source={{ html: mapHtml }}
-            style={styles.map}
-            onLoadEnd={() => setMapReady(true)}
-            javaScriptEnabled
-            domStorageEnabled
-          />
-          <TouchableOpacity style={styles.layersButton} activeOpacity={0.8}>
-            <Ionicons name="layers-outline" size={18} color="#FFFFFF" />
-          </TouchableOpacity>
-        </Animated.View>
-
-        {/* ---------------- TODAY'S ACTIVE TASKS ---------------- */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>Today's Active Tasks</Text>
-          <TouchableOpacity onPress={() => router.push('/driver/tasks' as any)} activeOpacity={0.7}>
-            <Text style={styles.viewAllLink}>View All →</Text>
-          </TouchableOpacity>
-        </View>
-
-        <FlatList
-          data={DEMO_TASKS}
-          keyExtractor={(item) => item.id}
-          scrollEnabled={false}
-          renderItem={({ item, index }) => (
-            <TaskCard
-              task={item}
-              index={index}
-              palette={palette}
-              onViewDetails={() => router.push(`/driver/tasks/${item.id}` as any)}
-              onNavigate={() => {
-                const url = Platform.select({
-                  ios: `http://maps.apple.com/?daddr=${item.lat},${item.lng}`,
-                  default: `https://www.openstreetmap.org/?mlat=${item.lat}&mlon=${item.lng}#map=16/${item.lat}/${item.lng}`,
-                });
-                if (url) Linking.openURL(url).catch(() => {});
-              }}
-            />
-          )}
-        />
-
-        {/* ---------------- QUICK STATS ---------------- */}
-        <Text style={[styles.sectionTitle, { color: palette.text, marginTop: 8 }]}>Quick Stats</Text>
-        <View style={styles.statsRow}>
-          <StatCard
-            palette={palette}
-            icon="checkmark-done-circle"
-            iconColor={BRAND.success}
-            label="Completed"
-            value={String(completed)}
-            delay={100}
-          />
-          <StatCard
-            palette={palette}
-            icon="time-outline"
-            iconColor={BRAND.warning}
-            label="Pending"
-            value={String(pending)}
-            delay={180}
-          />
-          <StatCard
-            palette={palette}
-            icon="speedometer-outline"
-            iconColor={BRAND.secondary}
-            label="Distance"
-            value={distanceTravelled}
-            delay={260}
-          />
-        </View>
-
-        <View style={{ height: 24 }} />
-      </ScrollView>
-
-      {/* ---------------- BOTTOM NAVIGATION ---------------- */}
-      <View
-        style={[
-          styles.bottomNav,
-          {
-            backgroundColor: palette.bg,
-            borderTopColor: palette.border,
-            paddingBottom: Math.max(insets.bottom, 10),
-          },
-        ]}
-      >
-        {bottomTabs.map((tab) => (
-          <BottomNavItem
-            key={tab.key}
-            label={tab.label}
-            icon={tab.icon}
-            active={bottomTab === tab.key}
-            onPress={() => onBottomTabPress(tab.key, tab.route)}
-          />
-        ))}
+    <Animated.View
+      entering={FadeInDown.duration(500)}
+      style={[
+        styles.statusCard,
+        { backgroundColor: palette.card, borderColor: palette.border },
+      ]}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.statusTitle, { color: palette.text }]}>
+          {isAvailable ? "Driver is Available" : "Off Duty"}
+        </Text>
+        <Text style={[styles.statusSubtitle, { color: palette.muted }]}>
+          Working hours: 7:00 AM – 5:00 PM · Automatic tracking
+        </Text>
       </View>
-    </SafeAreaView>
+      <View style={styles.statusIndicatorWrap}>
+        <Animated.View
+          style={[
+            styles.statusPulse,
+            { backgroundColor: statusColor },
+            pulseStyle,
+          ]}
+        />
+        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+      </View>
+    </Animated.View>
   );
 }
 
-// ============================================================
-// SUB COMPONENTS
-// ============================================================
-const BottomNavItem = React.memo(function BottomNavItem({
-  label,
-  icon,
-  active,
-  onPress,
-}: {
-  label: string;
-  icon: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  const scale = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+/* ============================================================
+   LIVE MAP CARD
+============================================================ */
+function LiveMapCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
+  const webviewRef = useRef<WebView>(null);
+  const [coords, setCoords] = useState(FALLBACK_LOCATION);
+  const [mapReady, setMapReady] = useState(false);
+  const [locationReady, setLocationReady] = useState(false);
 
-  const handlePress = () => {
-    scale.value = withSpring(1.15, { damping: 6 }, () => {
-      scale.value = withSpring(1);
-    });
-    onPress();
-  };
-
-  return (
-    <TouchableOpacity onPress={handlePress} activeOpacity={0.7} style={styles.bottomNavItem}>
-      <Animated.View style={animatedStyle}>
-        <Ionicons name={icon as any} size={22} color={active ? BRAND.primary : '#9CA3AF'} />
-      </Animated.View>
-      <Text style={[styles.bottomNavLabel, { color: active ? BRAND.primary : '#9CA3AF' }]}>{label}</Text>
-    </TouchableOpacity>
+  const html = useMemo(
+    () => buildLeafletHtml(coords.lat, coords.lng, palette.scheme === "dark"),
+    // Only rebuild HTML on theme change / first load, not every coord tick
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [palette.scheme],
   );
-});
 
-const StatCard = React.memo(function StatCard({
-  palette,
-  icon,
-  iconColor,
-  label,
-  value,
-  delay,
-}: {
-  palette: { card: string; border: string; text: string; muted: string };
-  icon: string;
-  iconColor: string;
-  label: string;
-  value: string;
-  delay: number;
-}) {
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const position = await Location.getCurrentPositionAsync({});
+          if (isMounted) {
+            setCoords({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+          }
+        }
+      } catch (e) {
+        // Fall back silently to default coordinates
+      } finally {
+        if (isMounted) setLocationReady(true);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Demo movement simulation - nudges the marker every few seconds
+  useEffect(() => {
+    if (!mapReady) return;
+    const interval = setInterval(() => {
+      setCoords((prev) => {
+        const next = {
+          lat: prev.lat + (Math.random() - 0.5) * 0.0006,
+          lng: prev.lng + (Math.random() - 0.5) * 0.0006,
+        };
+        webviewRef.current?.injectJavaScript(
+          `updateMarker(${next.lat}, ${next.lng}); true;`,
+        );
+        return next;
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [mapReady]);
+
   return (
     <Animated.View
-      entering={FadeInDown.duration(400).delay(delay)}
-      style={[styles.statCard, { backgroundColor: palette.card, borderColor: palette.border }]}
+      entering={FadeInDown.duration(500).delay(80)}
+      style={[
+        styles.mapCard,
+        { backgroundColor: palette.card, borderColor: palette.border },
+      ]}
     >
-      <Ionicons name={icon as any} size={20} color={iconColor} />
-      <Text style={[styles.statValue, { color: palette.text }]}>{value}</Text>
-      <Text style={[styles.statLabel, { color: palette.muted }]}>{label}</Text>
+      <WebView
+        ref={webviewRef}
+        originWhitelist={["*"]}
+        source={{ html }}
+        style={styles.mapWebview}
+        onLoadEnd={() => setMapReady(true)}
+        javaScriptEnabled
+        domStorageEnabled
+        startInLoadingState={false}
+      />
+
+      {(!mapReady || !locationReady) && (
+        <View
+          style={[styles.mapLoadingOverlay, { backgroundColor: palette.card }]}
+        >
+          <ActivityIndicator size="small" color={palette.primary} />
+          <Text style={[styles.mapLoadingText, { color: palette.muted }]}>
+            Locating you…
+          </Text>
+        </View>
+      )}
+
+      <Pressable
+        style={[styles.layersButton, { backgroundColor: palette.card }]}
+      >
+        <Ionicons name="layers-outline" size={18} color={palette.text} />
+      </Pressable>
     </Animated.View>
   );
-});
+}
 
-const TaskCard = React.memo(function TaskCard({
+/* ============================================================
+   TASK CARD
+============================================================ */
+const priorityColor = (
+  priority: TaskPriority,
+  palette: ReturnType<typeof getPalette>,
+) => {
+  if (priority === "High") return palette.danger;
+  if (priority === "Medium") return palette.warning;
+  return palette.success;
+};
+
+const statusColor = (
+  status: TaskStatus,
+  palette: ReturnType<typeof getPalette>,
+) => {
+  if (status === "Completed") return palette.success;
+  if (status === "In Progress") return palette.secondary;
+  return palette.primary;
+};
+
+const TaskCard = memo(function TaskCard({
   task,
-  index,
   palette,
   onViewDetails,
   onNavigate,
 }: {
   task: DemoTask;
-  index: number;
-  palette: { card: string; border: string; text: string; muted: string };
-  onViewDetails: () => void;
-  onNavigate: () => void;
+  palette: ReturnType<typeof getPalette>;
+  onViewDetails: (id: string) => void;
+  onNavigate: (task: DemoTask) => void;
 }) {
-  const pressScale = useSharedValue(1);
-  const cardStyle = useAnimatedStyle(() => ({ transform: [{ scale: pressScale.value }] }));
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const initial = task.customerName.trim().charAt(0).toUpperCase();
 
   return (
     <Animated.View
-      entering={FadeInDown.duration(450).delay(index * 90)}
-      style={[cardStyle, styles.taskCard, { backgroundColor: palette.card, borderColor: palette.border }]}
+      style={[
+        styles.taskCard,
+        { backgroundColor: palette.card, borderColor: palette.border },
+        animatedStyle,
+      ]}
     >
-      <View style={styles.taskCardTop}>
-        <View style={styles.customerRow}>
+      <View style={styles.taskTopRow}>
+        <View style={styles.taskCustomerRow}>
           {task.customerPicture ? (
-            <Image source={{ uri: task.customerPicture }} style={styles.customerAvatarImage} />
+            <Image
+              source={{ uri: task.customerPicture }}
+              style={styles.taskAvatarImage}
+            />
           ) : (
-            <View style={styles.customerAvatarFallback}>
-              <Text style={styles.customerAvatarLetter}>{task.customerName.charAt(0)}</Text>
+            <View
+              style={[
+                styles.taskAvatarFallback,
+                { backgroundColor: palette.primary },
+              ]}
+            >
+              <Text style={styles.taskAvatarFallbackText}>{initial}</Text>
             </View>
           )}
-          <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={[styles.customerName, { color: palette.text }]} numberOfLines={1}>
+          <View style={{ marginLeft: 10, flexShrink: 1 }}>
+            <Text
+              style={[styles.taskCustomerName, { color: palette.text }]}
+              numberOfLines={1}
+            >
               {task.customerName}
             </Text>
-            <Text style={[styles.customerAddress, { color: palette.muted }]} numberOfLines={1}>
+            <Text
+              style={[styles.taskAddress, { color: palette.muted }]}
+              numberOfLines={1}
+            >
               {task.address}
             </Text>
           </View>
         </View>
-        <View style={styles.badgeColumn}>
-          <View style={[styles.badge, { backgroundColor: `${priorityColor(task.priority)}20` }]}>
-            <Text style={[styles.badgeText, { color: priorityColor(task.priority) }]}>{task.priority}</Text>
-          </View>
-          <View style={[styles.badge, { backgroundColor: `${statusColor(task.status)}20`, marginTop: 6 }]}>
-            <Text style={[styles.badgeText, { color: statusColor(task.status) }]}>{task.status}</Text>
-          </View>
+
+        <View
+          style={[
+            styles.priorityBadge,
+            { backgroundColor: priorityColor(task.priority, palette) + "1A" },
+          ]}
+        >
+          <Text
+            style={[
+              styles.priorityBadgeText,
+              { color: priorityColor(task.priority, palette) },
+            ]}
+          >
+            {task.priority}
+          </Text>
         </View>
       </View>
 
       <View style={[styles.taskDivider, { backgroundColor: palette.border }]} />
 
-      <View style={styles.bottleRow}>
-        <View style={styles.bottleIconWrap}>
-          <MaterialCommunityIcons name="bottle-soda-classic-outline" size={20} color={BRAND.secondary} />
+      <View style={styles.taskBottleRow}>
+        <View
+          style={[styles.bottleIconWrap, { backgroundColor: palette.pillBg }]}
+        >
+          <Ionicons name="water-outline" size={18} color={palette.secondary} />
         </View>
-        <View style={{ flex: 1, marginLeft: 8 }}>
-          <Text style={[styles.bottleName, { color: palette.text }]}>{task.bottleName}</Text>
-          <Text style={[styles.bottleQty, { color: palette.muted }]}>{task.quantity}</Text>
+        <View style={{ marginLeft: 10, flex: 1 }}>
+          <Text
+            style={[styles.bottleName, { color: palette.text }]}
+            numberOfLines={1}
+          >
+            {task.bottleName}
+          </Text>
+          <Text style={[styles.bottleQuantity, { color: palette.muted }]}>
+            {task.quantity}
+          </Text>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.metaLabel, { color: palette.muted }]}>{task.distance}</Text>
-          <Text style={[styles.metaLabel, { color: palette.muted }]}>ETA {task.eta}</Text>
+
+        <View
+          style={[
+            styles.statusBadge,
+            { backgroundColor: statusColor(task.status, palette) + "1A" },
+          ]}
+        >
+          <Text
+            style={[
+              styles.statusBadgeText,
+              { color: statusColor(task.status, palette) },
+            ]}
+          >
+            {task.status}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.taskMetaRow}>
+        <View style={styles.taskMetaItem}>
+          <Ionicons name="navigate-outline" size={14} color={palette.muted} />
+          <Text style={[styles.taskMetaText, { color: palette.muted }]}>
+            {task.distanceKm} km
+          </Text>
+        </View>
+        <View style={styles.taskMetaItem}>
+          <Ionicons name="time-outline" size={14} color={palette.muted} />
+          <Text style={[styles.taskMetaText, { color: palette.muted }]}>
+            ETA {task.eta}
+          </Text>
         </View>
       </View>
 
       <View style={styles.taskButtonsRow}>
-        <TouchableOpacity
-          style={[styles.secondaryButton, { borderColor: palette.border }]}
-          activeOpacity={0.75}
-          onPress={onViewDetails}
+        <Pressable
+          onPressIn={() => (scale.value = withTiming(0.97, { duration: 100 }))}
+          onPressOut={() => (scale.value = withSpring(1, { damping: 12 }))}
+          onPress={() => onViewDetails(task.id)}
+          style={[
+            styles.taskButtonPrimary,
+            { backgroundColor: palette.primary },
+          ]}
         >
-          <Text style={[styles.secondaryButtonText, { color: palette.text }]}>View Details</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.primaryButton} activeOpacity={0.8} onPress={onNavigate}>
-          <Ionicons name="navigate" size={15} color="#FFFFFF" />
-          <Text style={styles.primaryButtonText}>Navigate</Text>
-        </TouchableOpacity>
+          <Text style={styles.taskButtonPrimaryText}>View Details</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => onNavigate(task)}
+          style={[styles.taskButtonSecondary, { borderColor: palette.border }]}
+        >
+          <Ionicons name="map-outline" size={16} color={palette.text} />
+          <Text
+            style={[styles.taskButtonSecondaryText, { color: palette.text }]}
+          >
+            Navigate
+          </Text>
+        </Pressable>
       </View>
     </Animated.View>
   );
 });
 
-// ============================================================
-// STYLES
-// ============================================================
-const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 12 },
+/* ============================================================
+   QUICK STATS
+============================================================ */
+function QuickStatCard({
+  icon,
+  label,
+  value,
+  color,
+  palette,
+  delay,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  color: string;
+  palette: ReturnType<typeof getPalette>;
+  delay: number;
+}) {
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(450).delay(delay)}
+      style={[
+        styles.statCard,
+        { backgroundColor: palette.card, borderColor: palette.border },
+      ]}
+    >
+      <View style={[styles.statIconWrap, { backgroundColor: color + "1A" }]}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <Text style={[styles.statValue, { color: palette.text }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: palette.muted }]}>{label}</Text>
+    </Animated.View>
+  );
+}
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
+/* ============================================================
+   BOTTOM NAVIGATION
+============================================================ */
+function BottomNav({
+  palette,
+  activeKey,
+  onNavigate,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  activeKey: string;
+  onNavigate: (route: string) => void;
+}) {
+  return (
+    <View
+      style={[
+        styles.bottomNav,
+        { backgroundColor: palette.headerBg, borderTopColor: palette.border },
+      ]}
+    >
+      {BOTTOM_TABS.map((tab) => {
+        const isActive = tab.key === activeKey;
+        return (
+          <BottomNavItem
+            key={tab.key}
+            label={tab.label}
+            icon={tab.icon as keyof typeof Ionicons.glyphMap}
+            isActive={isActive}
+            color={isActive ? palette.primary : palette.muted}
+            onPress={() => onNavigate(tab.route)}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function BottomNavItem({
+  label,
+  icon,
+  isActive,
+  color,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  isActive: boolean;
+  color: string;
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(isActive ? 1.08 : 1);
+
+  useEffect(() => {
+    scale.value = withSpring(isActive ? 1.08 : 1, { damping: 10 });
+  }, [isActive]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Pressable onPress={onPress} style={styles.bottomNavItem}>
+      <Animated.View style={animatedStyle}>
+        <Ionicons name={icon} size={22} color={color} />
+      </Animated.View>
+      <Text
+        style={[
+          styles.bottomNavLabel,
+          { color, fontWeight: isActive ? "700" : "500" },
+        ]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/* ============================================================
+   MAIN DASHBOARD SCREEN
+============================================================ */
+export default function DriverDashboardScreen() {
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isWideScreen = width >= 720;
+
+  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  const [systemScheme, setSystemScheme] = useState<Scheme>(
+    (Appearance.getColorScheme() as Scheme) || "light",
+  );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await SecureStore.getItemAsync(THEME_STORAGE_KEY);
+        if (saved === "light" || saved === "dark" || saved === "system") {
+          setThemeMode(saved);
+        }
+      } catch (e) {
+        // default remains "system"
+      }
+    })();
+
+    const subscription = Appearance.addChangeListener(({ colorScheme }) => {
+      setSystemScheme((colorScheme as Scheme) || "light");
+    });
+    return () => subscription.remove();
+  }, []);
+
+  const activeScheme: Scheme =
+    themeMode === "system" ? systemScheme : themeMode;
+  const palette = useMemo(() => getPalette(activeScheme), [activeScheme]);
+
+  const handleCycleTheme = useCallback(async () => {
+    const order: ThemeMode[] = ["light", "dark", "system"];
+    const nextIndex = (order.indexOf(themeMode) + 1) % order.length;
+    const next = order[nextIndex];
+    setThemeMode(next);
+    try {
+      await SecureStore.setItemAsync(THEME_STORAGE_KEY, next);
+    } catch (e) {
+      // ignore persistence failure
+    }
+  }, [themeMode]);
+
+  const entranceOpacity = useSharedValue(0);
+  const entranceTranslate = useSharedValue(16);
+  useEffect(() => {
+    entranceOpacity.value = withTiming(1, { duration: 500 });
+    entranceTranslate.value = withTiming(0, {
+      duration: 500,
+      easing: Easing.out(Easing.quad),
+    });
+  }, []);
+  const contentEntrance = useAnimatedStyle(() => ({
+    opacity: entranceOpacity.value,
+    transform: [{ translateY: entranceTranslate.value }],
+  }));
+
+  const handleTopTabNavigate = useCallback(
+    (route: string) => {
+      router.push(route as any);
+    },
+    [router],
+  );
+
+  const handleBottomNavNavigate = useCallback(
+    (route: string) => {
+      if (route === "/driver/dashboard") return;
+      router.push(route as any);
+    },
+    [router],
+  );
+
+  const handleOpenProfile = useCallback(() => {
+    router.push("/driver/account" as any);
+  }, [router]);
+
+  const handleOpenNotifications = useCallback(() => {
+    // Notification page will be built later.
+  }, []);
+
+  const handleViewAllTasks = useCallback(() => {
+    router.push("/driver/tasks" as any);
+  }, [router]);
+
+  const handleViewTaskDetails = useCallback(
+    (id: string) => {
+      router.push(`/driver/tasks/${id}` as any);
+    },
+    [router],
+  );
+
+  const handleNavigateToTask = useCallback((task: DemoTask) => {
+    const url = Platform.select({
+      ios: `http://maps.apple.com/?daddr=${task.lat},${task.lng}`,
+      android: `geo:${task.lat},${task.lng}?q=${task.lat},${task.lng}(${encodeURIComponent(
+        task.customerName,
+      )})`,
+      default: `https://www.openstreetmap.org/?mlat=${task.lat}&mlon=${task.lng}#map=16/${task.lat}/${task.lng}`,
+    });
+    if (url) Linking.openURL(url).catch(() => {});
+  }, []);
+
+  const completedCount = DEMO_TASKS.filter(
+    (t) => t.status === "Completed",
+  ).length;
+  const pendingCount = DEMO_TASKS.filter(
+    (t) => t.status !== "Completed",
+  ).length;
+
+  return (
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: palette.background }]}
+      edges={["top", "left", "right"]}
+    >
+      <DashboardHeader
+        palette={palette}
+        themeMode={themeMode}
+        onCycleTheme={handleCycleTheme}
+        onOpenNotifications={handleOpenNotifications}
+        onOpenProfile={handleOpenProfile}
+      />
+
+      <TopTabsBar palette={palette} onNavigate={handleTopTabNavigate} />
+
+      <ScrollView
+        style={{ flex: 1, backgroundColor: palette.background }}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingHorizontal: isWideScreen ? 32 : 16 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View style={contentEntrance}>
+          <WorkStatusCard palette={palette} />
+
+          <LiveMapCard palette={palette} />
+
+          <View style={styles.sectionHeaderRow}>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>
+              Today's Active Tasks
+            </Text>
+            <Pressable onPress={handleViewAllTasks} hitSlop={8}>
+              <Text style={[styles.sectionAction, { color: palette.primary }]}>
+                View All →
+              </Text>
+            </Pressable>
+          </View>
+
+          <FlatList
+            data={DEMO_TASKS}
+            keyExtractor={(item) => item.id}
+            scrollEnabled={false}
+            renderItem={({ item }) => (
+              <TaskCard
+                task={item}
+                palette={palette}
+                onViewDetails={handleViewTaskDetails}
+                onNavigate={handleNavigateToTask}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
+          />
+
+          <Text
+            style={[
+              styles.sectionTitle,
+              { color: palette.text, marginTop: 26, marginBottom: 14 },
+            ]}
+          >
+            Quick Stats
+          </Text>
+
+          <View style={styles.statsGrid}>
+            <QuickStatCard
+              icon="cube-outline"
+              label="Today's Deliveries"
+              value={String(DEMO_TASKS.length)}
+              color={palette.primary}
+              palette={palette}
+              delay={0}
+            />
+            <QuickStatCard
+              icon="checkmark-done-outline"
+              label="Completed"
+              value={String(completedCount)}
+              color={palette.success}
+              palette={palette}
+              delay={60}
+            />
+            <QuickStatCard
+              icon="hourglass-outline"
+              label="Pending"
+              value={String(pendingCount)}
+              color={palette.warning}
+              palette={palette}
+              delay={120}
+            />
+            <QuickStatCard
+              icon="speedometer-outline"
+              label="Distance Travelled"
+              value="18.6 km"
+              color={palette.secondary}
+              palette={palette}
+              delay={180}
+            />
+          </View>
+
+          <View style={{ height: 24 }} />
+        </Animated.View>
+      </ScrollView>
+
+      <BottomNav
+        palette={palette}
+        activeKey="dashboard"
+        onNavigate={handleBottomNavNavigate}
+      />
+    </SafeAreaView>
+  );
+}
+
+/* ============================================================
+   STYLES
+============================================================ */
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  scrollContent: {
+    paddingTop: 16,
+  },
+
+  /* Header */
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   logoBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: BRAND.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 10,
   },
-  brandTitle: { fontSize: 18, fontWeight: '800', letterSpacing: 0.2 },
-  brandSubtitle: { fontSize: 11, marginTop: 1 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  logoBadgeText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 17,
+  },
+  headerBrand: {
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   iconButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
+    alignItems: "center",
+    justifyContent: "center",
   },
   notifDot: {
-    position: 'absolute',
+    position: "absolute",
     top: 8,
-    right: 9,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: BRAND.danger,
+    right: 8,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
-  avatarImage: { width: 36, height: 36, borderRadius: 18 },
+  avatarImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   avatarFallback: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: BRAND.gold,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
-  avatarLetter: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  avatarFallbackText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 15,
+  },
 
-  tabsRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    position: 'relative',
-    marginBottom: 16,
+  /* Top Tabs */
+  topTabsWrapper: {
+    paddingHorizontal: 16,
   },
-  tabItem: { paddingVertical: 12, marginRight: 24 },
-  tabLabel: { fontSize: 14, fontWeight: '600' },
-  tabLabelActive: { fontWeight: '800' },
-  tabUnderline: {
-    position: 'absolute',
+  topTabsRow: {
+    flexDirection: "row",
+    gap: 26,
+  },
+  topTabItem: {
+    paddingBottom: 12,
+  },
+  topTabLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  topTabsBaseline: {
+    height: 1,
+    width: "100%",
+  },
+  topTabsUnderline: {
+    position: "absolute",
     bottom: 0,
-    height: 3,
+    height: 2,
     borderRadius: 2,
-    backgroundColor: BRAND.primary,
   },
 
+  /* Work Status */
   statusCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 18,
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1,
-    padding: 16,
+    borderRadius: 18,
+    padding: 18,
     marginBottom: 16,
   },
-  statusTitle: { fontSize: 15, fontWeight: '700' },
-  statusSubtitle: { fontSize: 12, marginTop: 3 },
-  statusIndicatorWrap: { paddingLeft: 12 },
-  statusDot: { width: 14, height: 14, borderRadius: 7 },
+  statusTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  statusSubtitle: {
+    fontSize: 12.5,
+  },
+  statusIndicatorWrap: {
+    width: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusPulse: {
+    position: "absolute",
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
 
+  /* Live Map */
   mapCard: {
-    height: 240,
-    borderRadius: 20,
-    overflow: 'hidden',
+    height: 260,
+    borderRadius: 22,
     borderWidth: 1,
-    marginBottom: 20,
-    position: 'relative',
-    backgroundColor: BRAND.cardDark,
+    overflow: "hidden",
+    marginBottom: 22,
   },
-  map: { flex: 1 },
-  mapLoading: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 2,
-    backgroundColor: BRAND.cardDark,
+  mapWebview: {
+    flex: 1,
+    backgroundColor: "transparent",
   },
-  mapLoadingText: { color: '#CBD5E1', marginTop: 8, fontSize: 12, fontWeight: '600' },
+  mapLoadingOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mapLoadingText: {
+    marginTop: 8,
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
   layersButton: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
+    position: "absolute",
+    top: 14,
+    right: 14,
     width: 38,
     height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(7,29,56,0.75)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 3,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
   },
 
+  /* Section header */
   sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  sectionTitle: { fontSize: 16, fontWeight: '800' },
-  viewAllLink: { fontSize: 13, fontWeight: '700', color: BRAND.secondary },
-
-  taskCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 14,
   },
-  taskCardTop: { flexDirection: 'row', justifyContent: 'space-between' },
-  customerRow: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 8 },
-  customerAvatarImage: { width: 42, height: 42, borderRadius: 21 },
-  customerAvatarFallback: {
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  sectionAction: {
+    fontSize: 13.5,
+    fontWeight: "700",
+  },
+
+  /* Task Card */
+  taskCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 16,
+  },
+  taskTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  taskCustomerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  taskAvatarImage: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: BRAND.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  customerAvatarLetter: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
-  customerName: { fontSize: 14, fontWeight: '700' },
-  customerAddress: { fontSize: 12, marginTop: 2 },
-  badgeColumn: { alignItems: 'flex-end' },
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  badgeText: { fontSize: 11, fontWeight: '700' },
-
-  taskDivider: { height: 1, marginVertical: 12 },
-
-  bottleRow: { flexDirection: 'row', alignItems: 'center' },
+  taskAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  taskAvatarFallbackText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  taskCustomerName: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  taskAddress: {
+    fontSize: 12.5,
+    marginTop: 2,
+  },
+  priorityBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  priorityBadgeText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  taskDivider: {
+    height: 1,
+    marginVertical: 14,
+  },
+  taskBottleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   bottleIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bottleName: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  bottleQuantity: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  statusBadgeText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  taskMetaRow: {
+    flexDirection: "row",
+    gap: 18,
+    marginTop: 14,
+  },
+  taskMetaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  taskMetaText: {
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
+  taskButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  taskButtonPrimary: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  taskButtonPrimaryText: {
+    color: "#FFFFFF",
+    fontSize: 13.5,
+    fontWeight: "700",
+  },
+  taskButtonSecondary: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  taskButtonSecondaryText: {
+    fontSize: 13.5,
+    fontWeight: "700",
+  },
+
+  /* Quick Stats */
+  statsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  statCard: {
+    width: "47%",
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 16,
+  },
+  statIconWrap: {
     width: 34,
     height: 34,
     borderRadius: 10,
-    backgroundColor: 'rgba(30,95,175,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
   },
-  bottleName: { fontSize: 13, fontWeight: '700' },
-  bottleQty: { fontSize: 12, marginTop: 1 },
-  metaLabel: { fontSize: 11, marginTop: 1 },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  statLabel: {
+    fontSize: 12,
+    marginTop: 2,
+  },
 
-  taskButtonsRow: { flexDirection: 'row', marginTop: 14, gap: 10 },
-  secondaryButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  secondaryButtonText: { fontSize: 13, fontWeight: '700' },
-  primaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    backgroundColor: BRAND.primary,
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
-
-  statsRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
-  statCard: {
-    flex: 1,
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: 17, fontWeight: '800', marginTop: 6 },
-  statLabel: { fontSize: 11, marginTop: 2 },
-
+  /* Bottom Nav */
   bottomNav: {
-    flexDirection: 'row',
+    flexDirection: "row",
     borderTopWidth: 1,
     paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 22 : 12,
+    paddingHorizontal: 8,
   },
-  bottomNavItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  bottomNavLabel: { fontSize: 11, fontWeight: '600', marginTop: 4 },
+  bottomNavItem: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  bottomNavLabel: {
+    fontSize: 11,
+  },
 });

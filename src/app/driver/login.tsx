@@ -78,10 +78,25 @@ const DemoAuth = {
     return { success: false };
   },
 
-  async persistSession(remember: boolean) {
-    if (remember) {
-      await SecureStore.setItemAsync(REMEMBER_ME_KEY, "true");
-      await SecureStore.setItemAsync(SESSION_KEY, DEMO_DRIVER.id);
+async persistSession(remember: boolean) {
+    if (!remember) return;
+
+    if (Platform.OS === "web") {
+      // Fallback for local web browser testing
+      try {
+        localStorage.setItem(REMEMBER_ME_KEY, "true");
+        localStorage.setItem(SESSION_KEY, DEMO_DRIVER.id);
+      } catch (error) {
+        console.error("Failed to save session to localStorage:", error);
+      }
+    } else {
+      // Native Mobile execution
+      try {
+        await SecureStore.setItemAsync(REMEMBER_ME_KEY, "true");
+        await SecureStore.setItemAsync(SESSION_KEY, DEMO_DRIVER.id);
+      } catch (error) {
+        console.error("Failed to save secure session:", error);
+      }
     }
   },
 };
@@ -578,7 +593,7 @@ const styles = StyleSheet.create({
 
   /* Success Overlay */
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.45)",
     alignItems: "center",
     justifyContent: "center",
