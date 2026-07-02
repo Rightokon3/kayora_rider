@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "kayoraRider",
+    "slug": "kayoraRider",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/kayora-logo.png",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/images/kayora-logo.png"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/kayora-logo.png",
+        "backgroundImage": "./assets/images/kayora-logo.png",
+        "monochromeImage": "./assets/images/kayora-logo.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/kayora-logo.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#208AEF",
+          "android": {
+            "image": "./assets/images/kayora-logo.png",
+            "imageWidth": 76
+          }
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
