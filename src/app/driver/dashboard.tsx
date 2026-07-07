@@ -85,17 +85,8 @@ function getPalette(scheme: Scheme) {
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 
 /* ============================================================
-   DEMO DATA
+   TYPES & INTERFACES (FETCHED FROM BACKEND)
 ============================================================ */
-const DEMO_DRIVER = {
-  name: "John Sunday",
-  phone: "+2348012345678",
-  driverId: "DRV-0001",
-  vehicle: "Kayora Delivery Van",
-  plate: "AKD-245-KY",
-  profilePicture: null as string | null,
-};
-
 type TaskPriority = "High" | "Medium" | "Low";
 type TaskStatus = "Assigned" | "In Progress" | "Completed";
 
@@ -115,53 +106,12 @@ interface DemoTask {
   lng: number;
 }
 
-const DEMO_TASKS: DemoTask[] = [
-  {
-    id: "TASK-1001",
-    customerName: "Amaka Obi",
-    customerPicture: null,
-    phone: "+2348023456789",
-    address: "12 Sapele Road, Benin City",
-    bottleName: "30cl Sharp-Sharp",
-    quantity: "20 Packs",
-    status: "Assigned",
-    priority: "High",
-    distanceKm: 5.4,
-    eta: "12:30 PM",
-    lat: 6.339,
-    lng: 5.6216,
-  },
-  {
-    id: "TASK-1002",
-    customerName: "Emeka Nwosu",
-    customerPicture: null,
-    phone: "+2348034567890",
-    address: "45 Airport Road, Benin City",
-    bottleName: "50cl Kayora Table Water",
-    quantity: "12 Packs",
-    status: "Assigned",
-    priority: "Medium",
-    distanceKm: 3.1,
-    eta: "1:05 PM",
-    lat: 6.3423,
-    lng: 5.6109,
-  },
-  {
-    id: "TASK-1003",
-    customerName: "Grace Idahosa",
-    customerPicture: null,
-    phone: "+2348045678901",
-    address: "7 Ring Road, Benin City",
-    bottleName: "75cl Sharp-Sharp",
-    quantity: "8 Packs",
-    status: "In Progress",
-    priority: "Low",
-    distanceKm: 1.8,
-    eta: "1:40 PM",
-    lat: 6.3355,
-    lng: 5.6037,
-  },
-];
+interface QuickStats {
+  todayDeliveries: number;
+  completed: number;
+  pending: number;
+  distanceTravelled: string;
+}
 
 /* ============================================================
    TOP NAV TABS
@@ -206,6 +156,23 @@ const BOTTOM_TABS = [
    FALLBACK LOCATION (Benin City) - used if GPS unavailable
 ============================================================ */
 const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
+
+/* ============================================================
+   HAVERSINE DISTANCE CALCULATOR
+============================================================ */
+function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 /* ============================================================
    LEAFLET HTML BUILDER
@@ -261,12 +228,16 @@ function buildLeafletHtml(lat: number, lng: number, isDark: boolean) {
 function DashboardHeader({
   palette,
   themeMode,
+  driverName,
+  profilePicture,
   onCycleTheme,
   onOpenNotifications,
   onOpenProfile,
 }: {
   palette: ReturnType<typeof getPalette>;
   themeMode: ThemeMode;
+  driverName: string;
+  profilePicture: string | null;
   onCycleTheme: () => void;
   onOpenNotifications: () => void;
   onOpenProfile: () => void;
@@ -278,7 +249,7 @@ function DashboardHeader({
         ? "moon-outline"
         : "contrast-outline";
 
-  const initial = DEMO_DRIVER.name.trim().charAt(0).toUpperCase();
+  const initial = driverName.trim().charAt(0).toUpperCase() || "D";
 
   return (
     <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
@@ -316,9 +287,9 @@ function DashboardHeader({
         </Pressable>
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
-          {DEMO_DRIVER.profilePicture ? (
+          {profilePicture ? (
             <Image
-              source={{ uri: DEMO_DRIVER.profilePicture }}
+              source={{ uri: profilePicture }}
               style={styles.avatarImage}
             />
           ) : (
@@ -416,7 +387,7 @@ function TopTabsBar({
 }
 
 /* ============================================================
-   WORK STATUS CARD (Automatic availability)
+   WORK STATUS CARD (With automatic availability checking)
 ============================================================ */
 function WorkStatusCard({
   palette,
@@ -488,61 +459,30 @@ function WorkStatusCard({
 /* ============================================================
    LIVE MAP CARD
 ============================================================ */
-function LiveMapCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
+function LiveMapCard({ 
+  palette, 
+  currentCoords, 
+  locationReady 
+}: { 
+  palette: ReturnType<typeof getPalette>; 
+  currentCoords: { lat: number; lng: number }; 
+  locationReady: boolean; 
+}) {
   const webviewRef = useRef<WebView>(null);
-  const [coords, setCoords] = useState(FALLBACK_LOCATION);
   const [mapReady, setMapReady] = useState(false);
-  const [locationReady, setLocationReady] = useState(false);
 
   const html = useMemo(
-    () => buildLeafletHtml(coords.lat, coords.lng, palette.scheme === "dark"),
-    // Only rebuild HTML on theme change / first load, not every coord tick
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [palette.scheme],
+    () => buildLeafletHtml(currentCoords.lat, currentCoords.lng, palette.scheme === "dark"),
+    [palette.scheme]
   );
 
   useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          const position = await Location.getCurrentPositionAsync({});
-          if (isMounted) {
-            setCoords({
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            });
-          }
-        }
-      } catch (e) {
-        // Fall back silently to default coordinates
-      } finally {
-        if (isMounted) setLocationReady(true);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Demo movement simulation - nudges the marker every few seconds
-  useEffect(() => {
-    if (!mapReady) return;
-    const interval = setInterval(() => {
-      setCoords((prev) => {
-        const next = {
-          lat: prev.lat + (Math.random() - 0.5) * 0.0006,
-          lng: prev.lng + (Math.random() - 0.5) * 0.0006,
-        };
-        webviewRef.current?.injectJavaScript(
-          `updateMarker(${next.lat}, ${next.lng}); true;`,
-        );
-        return next;
-      });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [mapReady]);
+    if (mapReady && locationReady) {
+      webviewRef.current?.injectJavaScript(
+        `updateMarker(${currentCoords.lat}, ${currentCoords.lng}); true;`
+      );
+    }
+  }, [currentCoords, mapReady, locationReady]);
 
   return (
     <Animated.View
@@ -620,7 +560,7 @@ const TaskCard = memo(function TaskCard({
     transform: [{ scale: scale.value }],
   }));
 
-  const initial = task.customerName.trim().charAt(0).toUpperCase();
+  const initial = task.customerName.trim().charAt(0).toUpperCase() || "C";
 
   return (
     <Animated.View
@@ -885,15 +825,174 @@ export default function DriverDashboardScreen() {
     (Appearance.getColorScheme() as Scheme) || "light",
   );
 
+  // Backend state data
+  const [loading, setLoading] = useState(true);
+  const [tasks, setTasks] = useState<DemoTask[]>([]);
+  const [driverName, setDriverName] = useState("Driver");
+  const [profilePicture, setProfilePicture] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [stats, setStats] = useState<QuickStats>({
+    todayDeliveries: 0,
+    completed: 0,
+    pending: 0,
+    distanceTravelled: "0.0 km"
+  });
+
+  // Location and tracking state
+  const [coords, setCoords] = useState(FALLBACK_LOCATION);
+  const [locationReady, setLocationReady] = useState(false);
+  const lastPosition = useRef<{ latitude: number; longitude: number } | null>(null);
+
+  const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
+
+  // Live data fetch handlers
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const token = Platform.OS === 'web' 
+        ? localStorage.getItem("kayora_auth_token")
+        : await SecureStore.getItemAsync("kayora_auth_token");
+
+      // Fetch Profile/Driver Info
+      const driverRes = await fetch(`${API_URL}/api/driver/profile`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (driverRes.ok) {
+        const driverData = await driverRes.json();
+        setDriverName(driverData.name || "Driver");
+        setProfilePicture(driverData.profile_picture || null);
+      }
+
+      // Fetch Tasks
+      const tasksRes = await fetch(`${API_URL}/api/driver/tasks`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (tasksRes.ok) {
+        const tasksJson = await tasksRes.json();
+        const fetchedTasks = tasksJson.data || tasksJson;
+        setTasks(fetchedTasks);
+        
+        const active = fetchedTasks.find((t: DemoTask) => t.status === "In Progress");
+        if (active) setActiveTaskId(active.id);
+      }
+
+      // Fetch Dashboard Stats
+      const statsRes = await fetch(`${API_URL}/api/driver/stats`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (statsRes.ok) {
+        const statsJson = await statsRes.json();
+        setStats(statsJson);
+      }
+    } catch (error) {
+      console.error("Laravel API dashboard fetch issue:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Tracking engine using Haversine formula
   useEffect(() => {
+    let watchSubscription: Location.LocationSubscription | null = null;
+
     (async () => {
       try {
-        const saved = await SecureStore.getItemAsync(THEME_STORAGE_KEY);
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
+
+        // Get initial positioning
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced
+        });
+        setCoords({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        lastPosition.current = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        };
+        setLocationReady(true);
+
+        // Real-time position tracking subscription
+        watchSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            distanceInterval: 10, // Fire updates when driver moves 10 meters
+            timeInterval: 10000,
+          },
+          async (location) => {
+            const { latitude, longitude } = location.coords;
+            setCoords({ lat: latitude, lng: longitude });
+
+            let distanceDelta = 0;
+            if (lastPosition.current) {
+              distanceDelta = getHaversineDistance(
+                lastPosition.current.latitude,
+                lastPosition.current.longitude,
+                latitude,
+                longitude
+              );
+            }
+
+            lastPosition.current = { latitude, longitude };
+
+            // Emit tracked details to production endpoint
+            const token = Platform.OS === 'web' 
+              ? localStorage.getItem("kayora_auth_token")
+              : await SecureStore.getItemAsync("kayora_auth_token");
+
+            await fetch(`${API_URL}/api/driver/location-update`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+              },
+              body: JSON.stringify({
+                task_id: activeTaskId,
+                latitude,
+                longitude,
+                distance_delta_km: distanceDelta,
+              }),
+            }).catch(() => {});
+          }
+        );
+      } catch (e) {
+        console.error("Tracking setup failure:", e);
+      }
+    })();
+
+    return () => {
+      if (watchSubscription) watchSubscription.remove();
+    };
+  }, [activeTaskId]);
+
+  useEffect(() => {
+    fetchDashboardData();
+
+    (async () => {
+      try {
+        const saved = Platform.OS === 'web'
+          ? localStorage.getItem(THEME_STORAGE_KEY)
+          : await SecureStore.getItemAsync(THEME_STORAGE_KEY);
         if (saved === "light" || saved === "dark" || saved === "system") {
-          setThemeMode(saved);
+          setThemeMode(saved as ThemeMode);
         }
       } catch (e) {
-        // default remains "system"
+        // Fallback silently
       }
     })();
 
@@ -913,7 +1012,11 @@ export default function DriverDashboardScreen() {
     const next = order[nextIndex];
     setThemeMode(next);
     try {
-      await SecureStore.setItemAsync(THEME_STORAGE_KEY, next);
+      if (Platform.OS === 'web') {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      } else {
+        await SecureStore.setItemAsync(THEME_STORAGE_KEY, next);
+      }
     } catch (e) {
       // ignore persistence failure
     }
@@ -953,7 +1056,7 @@ export default function DriverDashboardScreen() {
   }, [router]);
 
   const handleOpenNotifications = useCallback(() => {
-    // Notification page will be built later.
+    // Notification page implementation reference
   }, []);
 
   const handleViewAllTasks = useCallback(() => {
@@ -978,13 +1081,6 @@ export default function DriverDashboardScreen() {
     if (url) Linking.openURL(url).catch(() => {});
   }, []);
 
-  const completedCount = DEMO_TASKS.filter(
-    (t) => t.status === "Completed",
-  ).length;
-  const pendingCount = DEMO_TASKS.filter(
-    (t) => t.status !== "Completed",
-  ).length;
-
   return (
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: palette.background }]}
@@ -993,6 +1089,8 @@ export default function DriverDashboardScreen() {
       <DashboardHeader
         palette={palette}
         themeMode={themeMode}
+        driverName={driverName}
+        profilePicture={profilePicture}
         onCycleTheme={handleCycleTheme}
         onOpenNotifications={handleOpenNotifications}
         onOpenProfile={handleOpenProfile}
@@ -1011,7 +1109,7 @@ export default function DriverDashboardScreen() {
         <Animated.View style={contentEntrance}>
           <WorkStatusCard palette={palette} />
 
-          <LiveMapCard palette={palette} />
+          <LiveMapCard palette={palette} currentCoords={coords} locationReady={locationReady} />
 
           <View style={styles.sectionHeaderRow}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
@@ -1024,20 +1122,24 @@ export default function DriverDashboardScreen() {
             </Pressable>
           </View>
 
-          <FlatList
-            data={DEMO_TASKS}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-            renderItem={({ item }) => (
-              <TaskCard
-                task={item}
-                palette={palette}
-                onViewDetails={handleViewTaskDetails}
-                onNavigate={handleNavigateToTask}
-              />
-            )}
-            ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
-          />
+          {loading ? (
+            <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 20 }} />
+          ) : (
+            <FlatList
+              data={tasks}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              renderItem={({ item }) => (
+                <TaskCard
+                  task={item}
+                  palette={palette}
+                  onViewDetails={handleViewTaskDetails}
+                  onNavigate={handleNavigateToTask}
+                />
+              )}
+              ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
+            />
+          )}
 
           <Text
             style={[
@@ -1052,7 +1154,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="cube-outline"
               label="Today's Deliveries"
-              value={String(DEMO_TASKS.length)}
+              value={String(stats.todayDeliveries)}
               color={palette.primary}
               palette={palette}
               delay={0}
@@ -1060,7 +1162,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="checkmark-done-outline"
               label="Completed"
-              value={String(completedCount)}
+              value={String(stats.completed)}
               color={palette.success}
               palette={palette}
               delay={60}
@@ -1068,7 +1170,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="hourglass-outline"
               label="Pending"
-              value={String(pendingCount)}
+              value={String(stats.pending)}
               color={palette.warning}
               palette={palette}
               delay={120}
@@ -1076,7 +1178,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="speedometer-outline"
               label="Distance Travelled"
-              value="18.6 km"
+              value={stats.distanceTravelled}
               color={palette.secondary}
               palette={palette}
               delay={180}

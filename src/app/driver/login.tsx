@@ -12,7 +12,6 @@ import {
   Modal,
   Linking,
   ActivityIndicator,
-  Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
@@ -21,11 +20,8 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSequence,
-  withRepeat,
   withSpring,
-  withDelay,
   Easing,
-  runOnJS,
 } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -45,61 +41,9 @@ const COLORS = {
   success: "#22C55E",
 };
 
-/* ============================================================
-   DEMO AUTH UTILITY
-   Simulated authentication until backend is available.
-============================================================ */
-const DEMO_DRIVER = {
-  id: "DRV0001",
-  email: "driver@kayora.com",
-  password: "driver123",
-  name: "John Sunday",
-};
-
+const API_BASE_URL = "http://127.0.0.1:8000";
 const REMEMBER_ME_KEY = "kayora_driver_remember_me";
 const SESSION_KEY = "kayora_driver_session";
-
-type DemoAuthResult =
-  | { success: true; driverName: string }
-  | { success: false };
-
-const DemoAuth = {
-  async login(identifier: string, password: string): Promise<DemoAuthResult> {
-    // Simulate network latency
-    await new Promise((resolve) => setTimeout(resolve, 900));
-
-    const normalized = identifier.trim().toLowerCase();
-    const isIdMatch = normalized === DEMO_DRIVER.id.toLowerCase();
-    const isEmailMatch = normalized === DEMO_DRIVER.email.toLowerCase();
-
-    if ((isIdMatch || isEmailMatch) && password === DEMO_DRIVER.password) {
-      return { success: true, driverName: DEMO_DRIVER.name };
-    }
-    return { success: false };
-  },
-
-async persistSession(remember: boolean) {
-    if (!remember) return;
-
-    if (Platform.OS === "web") {
-      // Fallback for local web browser testing
-      try {
-        localStorage.setItem(REMEMBER_ME_KEY, "true");
-        localStorage.setItem(SESSION_KEY, DEMO_DRIVER.id);
-      } catch (error) {
-        console.error("Failed to save session to localStorage:", error);
-      }
-    } else {
-      // Native Mobile execution
-      try {
-        await SecureStore.setItemAsync(REMEMBER_ME_KEY, "true");
-        await SecureStore.setItemAsync(SESSION_KEY, DEMO_DRIVER.id);
-      } catch (error) {
-        console.error("Failed to save secure session:", error);
-      }
-    }
-  },
-};
 
 /* ============================================================
    MAIN COMPONENT
@@ -114,6 +58,7 @@ export default function DriverLoginScreen() {
 
   const [loading, setLoading] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("Incorrect Driver ID or Password");
   const [showSuccess, setShowSuccess] = useState(false);
   const [driverName, setDriverName] = useState("");
   const [forgotVisible, setForgotVisible] = useState(false);
@@ -191,8 +136,15 @@ export default function DriverLoginScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const remembered = await SecureStore.getItemAsync(REMEMBER_ME_KEY);
-        const session = await SecureStore.getItemAsync(SESSION_KEY);
+        let remembered = null;
+        let session = null;
+        if (Platform.OS === "web") {
+          remembered = localStorage.getItem(REMEMBER_ME_KEY);
+          session = localStorage.getItem(SESSION_KEY);
+        } else {
+          remembered = await SecureStore.getItemAsync(REMEMBER_ME_KEY);
+          session = await SecureStore.getItemAsync(SESSION_KEY);
+        }
         if (remembered === "true" && session) {
           router.replace("/driver/dashboard");
         }
@@ -208,7 +160,7 @@ export default function DriverLoginScreen() {
     errorTimeoutRef.current = setTimeout(() => {
       setShowError(false);
       borderProgress.value = withTiming(0, { duration: 200 });
-    }, 2000);
+    }, 3000);
   };
 
   const handleLogin = useCallback(async () => {
@@ -216,6 +168,7 @@ export default function DriverLoginScreen() {
     setShowError(false);
 
     if (!identifier.trim() || !password.trim()) {
+      setErrorMsg("Please fill in all fields");
       triggerShake();
       setShowError(true);
       resetErrorAfterDelay();
@@ -223,17 +176,48 @@ export default function DriverLoginScreen() {
     }
 
     setLoading(true);
-    const result = await DemoAuth.login(identifier, password);
-    setLoading(false);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify({
+          email: identifier.trim().toLowerCase(),
+          password: password,
+        }),
+      });
 
-    if (result.success) {
-      await DemoAuth.persistSession(rememberMe);
-      setDriverName(result.driverName);
-      showSuccessAnimation();
-      setTimeout(() => {
-        router.replace("/driver/dashboard");
-      }, 1000);
-    } else {
+      const data = await response.json();
+      setLoading(false);
+
+      if (response.ok && data.success) {
+        // Handle Session Persistence
+        if (rememberMe) {
+          if (Platform.OS === "web") {
+            localStorage.setItem(REMEMBER_ME_KEY, "true");
+            localStorage.setItem(SESSION_KEY, data.token);
+          } else {
+            await SecureStore.setItemAsync(REMEMBER_ME_KEY, "true");
+            await SecureStore.setItemAsync(SESSION_KEY, data.token);
+          }
+        }
+
+        setDriverName(data.user.name || "Driver");
+        showSuccessAnimation();
+        setTimeout(() => {
+          router.replace("/driver/dashboard");
+        }, 1200);
+      } else {
+        setErrorMsg(data.message || "Incorrect Driver ID or Password");
+        triggerShake();
+        setShowError(true);
+        resetErrorAfterDelay();
+      }
+    } catch (err) {
+      setLoading(false);
+      setErrorMsg("Network error connecting to backend server.");
       triggerShake();
       setShowError(true);
       resetErrorAfterDelay();
@@ -314,7 +298,7 @@ export default function DriverLoginScreen() {
               {showError && (
                 <Animated.View style={styles.errorBanner}>
                   <Ionicons name="alert-circle" size={16} color={COLORS.error} />
-                  <Text style={styles.errorText}>Incorrect Driver ID or Password</Text>
+                  <Text style={styles.errorText}>{errorMsg}</Text>
                 </Animated.View>
               )}
 
@@ -429,8 +413,6 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     alignSelf: "center",
   },
-
-  /* Branding */
   brandingBlock: {
     alignItems: "center",
     marginBottom: 36,
@@ -466,8 +448,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
   },
-
-  /* Card */
   card: {
     backgroundColor: COLORS.card,
     borderRadius: 24,
@@ -505,8 +485,6 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     height: "100%",
   },
-
-  /* Error */
   errorBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -522,8 +500,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-
-  /* Remember Me / Forgot Password */
   rowBetween: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -560,8 +536,6 @@ const styles = StyleSheet.create({
     color: COLORS.secondary,
     fontWeight: "600",
   },
-
-  /* Login Button */
   loginButton: {
     backgroundColor: COLORS.primary,
     borderRadius: 16,
@@ -583,15 +557,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 0.3,
   },
-
   footerText: {
     textAlign: "center",
     fontSize: 12,
     color: COLORS.subtitle,
     marginTop: 24,
   },
-
-  /* Success Overlay */
   overlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.45)",
@@ -627,8 +598,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 4,
   },
-
-  /* Forgot Password Modal */
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(15,23,42,0.5)",
