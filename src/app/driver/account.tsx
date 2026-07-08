@@ -1290,7 +1290,7 @@ const styles = StyleSheet.create({
 
   /* Confirm Dialog */
   confirmOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(15,23,42,0.5)",
     alignItems: "center",
     justifyContent: "center",

@@ -1,41 +1,44 @@
-import { Ionicons } from "@expo/vector-icons";
-import * as Location from "expo-location";
-import { useRouter } from "expo-router";
-import * as SecureStore from "expo-secure-store";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
+import React, {
   useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  memo,
 } from "react";
 import {
-  ActivityIndicator,
-  Appearance,
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  ScrollView,
   FlatList,
   Image,
   Linking,
+  Appearance,
+  ActivityIndicator,
   Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
   useWindowDimensions,
-  View
+  ColorSchemeName,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
+import { WebView } from "react-native-webview";
+import * as Location from "expo-location";
+import * as SecureStore from "expo-secure-store";
+import { Ionicons } from "@expo/vector-icons";
 import Animated, {
-  Easing,
-  FadeInDown,
-  useAnimatedStyle,
   useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  withDelay,
   withRepeat,
   withSequence,
-  withSpring,
-  withTiming
+  Easing,
+  FadeInDown,
+  FadeIn,
 } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
 
 /* ============================================================
    BRAND COLORS
@@ -85,8 +88,17 @@ function getPalette(scheme: Scheme) {
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 
 /* ============================================================
-   TYPES & INTERFACES (FETCHED FROM BACKEND)
+   DEMO DATA
 ============================================================ */
+const DEMO_DRIVER = {
+  name: "John Sunday",
+  phone: "+2348012345678",
+  driverId: "DRV-0001",
+  vehicle: "Kayora Delivery Van",
+  plate: "AKD-245-KY",
+  profilePicture: null as string | null,
+};
+
 type TaskPriority = "High" | "Medium" | "Low";
 type TaskStatus = "Assigned" | "In Progress" | "Completed";
 
@@ -106,12 +118,53 @@ interface DemoTask {
   lng: number;
 }
 
-interface QuickStats {
-  todayDeliveries: number;
-  completed: number;
-  pending: number;
-  distanceTravelled: string;
-}
+const DEMO_TASKS: DemoTask[] = [
+  {
+    id: "TASK-1001",
+    customerName: "Amaka Obi",
+    customerPicture: null,
+    phone: "+2348023456789",
+    address: "12 Sapele Road, Benin City",
+    bottleName: "30cl Sharp-Sharp",
+    quantity: "20 Packs",
+    status: "Assigned",
+    priority: "High",
+    distanceKm: 5.4,
+    eta: "12:30 PM",
+    lat: 6.339,
+    lng: 5.6216,
+  },
+  {
+    id: "TASK-1002",
+    customerName: "Emeka Nwosu",
+    customerPicture: null,
+    phone: "+2348034567890",
+    address: "45 Airport Road, Benin City",
+    bottleName: "50cl Kayora Table Water",
+    quantity: "12 Packs",
+    status: "Assigned",
+    priority: "Medium",
+    distanceKm: 3.1,
+    eta: "1:05 PM",
+    lat: 6.3423,
+    lng: 5.6109,
+  },
+  {
+    id: "TASK-1003",
+    customerName: "Grace Idahosa",
+    customerPicture: null,
+    phone: "+2348045678901",
+    address: "7 Ring Road, Benin City",
+    bottleName: "75cl Sharp-Sharp",
+    quantity: "8 Packs",
+    status: "In Progress",
+    priority: "Low",
+    distanceKm: 1.8,
+    eta: "1:40 PM",
+    lat: 6.3355,
+    lng: 5.6037,
+  },
+];
 
 /* ============================================================
    TOP NAV TABS
@@ -126,53 +179,16 @@ const TOP_TABS = [
    BOTTOM NAV TABS
 ============================================================ */
 const BOTTOM_TABS = [
-  {
-    key: "dashboard",
-    label: "Dashboard",
-    icon: "car-sport",
-    route: "/driver/dashboard" as const,
-  },
-  {
-    key: "orders",
-    label: "Orders",
-    icon: "receipt-outline",
-    route: "/driver/orders" as const,
-  },
-  {
-    key: "tasks",
-    label: "Tasks",
-    icon: "list-outline",
-    route: "/driver/tasks" as const,
-  },
-  {
-    key: "account",
-    label: "Account",
-    icon: "person-outline",
-    route: "/driver/account" as const,
-  },
+  { key: "dashboard", label: "Dashboard", icon: "car-sport", route: "/driver/dashboard" as const },
+  { key: "orders", label: "Orders", icon: "receipt-outline", route: "/driver/orders" as const },
+  { key: "tasks", label: "Tasks", icon: "list-outline", route: "/driver/tasks" as const },
+  { key: "account", label: "Account", icon: "person-outline", route: "/driver/account" as const },
 ];
 
 /* ============================================================
    FALLBACK LOCATION (Benin City) - used if GPS unavailable
 ============================================================ */
 const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
-
-/* ============================================================
-   HAVERSINE DISTANCE CALCULATOR
-============================================================ */
-function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371; // Earth's radius in km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
 
 /* ============================================================
    LEAFLET HTML BUILDER
@@ -228,28 +244,20 @@ function buildLeafletHtml(lat: number, lng: number, isDark: boolean) {
 function DashboardHeader({
   palette,
   themeMode,
-  driverName,
-  profilePicture,
   onCycleTheme,
   onOpenNotifications,
   onOpenProfile,
 }: {
   palette: ReturnType<typeof getPalette>;
   themeMode: ThemeMode;
-  driverName: string;
-  profilePicture: string | null;
   onCycleTheme: () => void;
   onOpenNotifications: () => void;
   onOpenProfile: () => void;
 }) {
   const themeIcon =
-    themeMode === "light"
-      ? "sunny-outline"
-      : themeMode === "dark"
-        ? "moon-outline"
-        : "contrast-outline";
+    themeMode === "light" ? "sunny-outline" : themeMode === "dark" ? "moon-outline" : "contrast-outline";
 
-  const initial = driverName.trim().charAt(0).toUpperCase() || "D";
+  const initial = DEMO_DRIVER.name.trim().charAt(0).toUpperCase();
 
   return (
     <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
@@ -276,29 +284,15 @@ function DashboardHeader({
           hitSlop={10}
           style={[styles.iconButton, { backgroundColor: palette.pillBg }]}
         >
-          <Ionicons
-            name="notifications-outline"
-            size={18}
-            color={palette.text}
-          />
-          <View
-            style={[styles.notifDot, { backgroundColor: palette.danger }]}
-          />
+          <Ionicons name="notifications-outline" size={18} color={palette.text} />
+          <View style={[styles.notifDot, { backgroundColor: palette.danger }]} />
         </Pressable>
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
-          {profilePicture ? (
-            <Image
-              source={{ uri: profilePicture }}
-              style={styles.avatarImage}
-            />
+          {DEMO_DRIVER.profilePicture ? (
+            <Image source={{ uri: DEMO_DRIVER.profilePicture }} style={styles.avatarImage} />
           ) : (
-            <View
-              style={[
-                styles.avatarFallback,
-                { backgroundColor: palette.secondary },
-              ]}
-            >
+            <View style={[styles.avatarFallback, { backgroundColor: palette.secondary }]}>
               <Text style={styles.avatarFallbackText}>{initial}</Text>
             </View>
           )}
@@ -311,13 +305,7 @@ function DashboardHeader({
 /* ============================================================
    TOP TABS
 ============================================================ */
-function TopTabsBar({
-  palette,
-  onNavigate,
-}: {
-  palette: ReturnType<typeof getPalette>;
-  onNavigate: (route: string) => void;
-}) {
+function TopTabsBar({ palette, onNavigate }: { palette: ReturnType<typeof getPalette>; onNavigate: (route: string) => void }) {
   const [pressedKey, setPressedKey] = useState<string | null>(null);
   const underlineX = useSharedValue(0);
   const underlineWidth = useSharedValue(0);
@@ -327,14 +315,8 @@ function TopTabsBar({
     setPressedKey(key);
     const layout = tabLayouts.current[key];
     if (layout) {
-      underlineX.value = withTiming(layout.x, {
-        duration: 220,
-        easing: Easing.out(Easing.quad),
-      });
-      underlineWidth.value = withTiming(layout.width, {
-        duration: 220,
-        easing: Easing.out(Easing.quad),
-      });
+      underlineX.value = withTiming(layout.x, { duration: 220, easing: Easing.out(Easing.quad) });
+      underlineWidth.value = withTiming(layout.width, { duration: 220, easing: Easing.out(Easing.quad) });
     }
     setTimeout(() => onNavigate(route), 140);
   };
@@ -361,10 +343,7 @@ function TopTabsBar({
             <Text
               style={[
                 styles.topTabLabel,
-                {
-                  color:
-                    pressedKey === tab.key ? palette.primary : palette.muted,
-                },
+                { color: pressedKey === tab.key ? palette.primary : palette.muted },
               ]}
             >
               {tab.label}
@@ -372,28 +351,16 @@ function TopTabsBar({
           </Pressable>
         ))}
       </View>
-      <View
-        style={[styles.topTabsBaseline, { backgroundColor: palette.border }]}
-      />
-      <Animated.View
-        style={[
-          styles.topTabsUnderline,
-          { backgroundColor: palette.primary },
-          underlineStyle,
-        ]}
-      />
+      <View style={[styles.topTabsBaseline, { backgroundColor: palette.border }]} />
+      <Animated.View style={[styles.topTabsUnderline, { backgroundColor: palette.primary }, underlineStyle]} />
     </View>
   );
 }
 
 /* ============================================================
-   WORK STATUS CARD (With automatic availability checking)
+   WORK STATUS CARD (Automatic availability)
 ============================================================ */
-function WorkStatusCard({
-  palette,
-}: {
-  palette: ReturnType<typeof getPalette>;
-}) {
+function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
   const [isAvailable, setIsAvailable] = useState(() => {
     const hour = new Date().getHours();
     return hour >= 7 && hour < 17;
@@ -412,10 +379,10 @@ function WorkStatusCard({
     pulse.value = withRepeat(
       withSequence(
         withTiming(1.6, { duration: 900, easing: Easing.out(Easing.quad) }),
-        withTiming(1, { duration: 0 }),
+        withTiming(1, { duration: 0 })
       ),
       -1,
-      false,
+      false
     );
   }, []);
 
@@ -429,10 +396,7 @@ function WorkStatusCard({
   return (
     <Animated.View
       entering={FadeInDown.duration(500)}
-      style={[
-        styles.statusCard,
-        { backgroundColor: palette.card, borderColor: palette.border },
-      ]}
+      style={[styles.statusCard, { backgroundColor: palette.card, borderColor: palette.border }]}
     >
       <View style={{ flex: 1 }}>
         <Text style={[styles.statusTitle, { color: palette.text }]}>
@@ -443,13 +407,7 @@ function WorkStatusCard({
         </Text>
       </View>
       <View style={styles.statusIndicatorWrap}>
-        <Animated.View
-          style={[
-            styles.statusPulse,
-            { backgroundColor: statusColor },
-            pulseStyle,
-          ]}
-        />
+        <Animated.View style={[styles.statusPulse, { backgroundColor: statusColor }, pulseStyle]} />
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       </View>
     </Animated.View>
@@ -459,38 +417,63 @@ function WorkStatusCard({
 /* ============================================================
    LIVE MAP CARD
 ============================================================ */
-function LiveMapCard({ 
-  palette, 
-  currentCoords, 
-  locationReady 
-}: { 
-  palette: ReturnType<typeof getPalette>; 
-  currentCoords: { lat: number; lng: number }; 
-  locationReady: boolean; 
-}) {
+function LiveMapCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
   const webviewRef = useRef<WebView>(null);
+  const [coords, setCoords] = useState(FALLBACK_LOCATION);
   const [mapReady, setMapReady] = useState(false);
+  const [locationReady, setLocationReady] = useState(false);
 
   const html = useMemo(
-    () => buildLeafletHtml(currentCoords.lat, currentCoords.lng, palette.scheme === "dark"),
+    () => buildLeafletHtml(coords.lat, coords.lng, palette.scheme === "dark"),
+    // Only rebuild HTML on theme change / first load, not every coord tick
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [palette.scheme]
   );
 
   useEffect(() => {
-    if (mapReady && locationReady) {
-      webviewRef.current?.injectJavaScript(
-        `updateMarker(${currentCoords.lat}, ${currentCoords.lng}); true;`
-      );
-    }
-  }, [currentCoords, mapReady, locationReady]);
+    let isMounted = true;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const position = await Location.getCurrentPositionAsync({});
+          if (isMounted) {
+            setCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
+          }
+        }
+      } catch (e) {
+        // Fall back silently to default coordinates
+      } finally {
+        if (isMounted) setLocationReady(true);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Demo movement simulation - nudges the marker every few seconds
+  useEffect(() => {
+    if (!mapReady) return;
+    const interval = setInterval(() => {
+      setCoords((prev) => {
+        const next = {
+          lat: prev.lat + (Math.random() - 0.5) * 0.0006,
+          lng: prev.lng + (Math.random() - 0.5) * 0.0006,
+        };
+        webviewRef.current?.injectJavaScript(
+          `updateMarker(${next.lat}, ${next.lng}); true;`
+        );
+        return next;
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [mapReady]);
 
   return (
     <Animated.View
       entering={FadeInDown.duration(500).delay(80)}
-      style={[
-        styles.mapCard,
-        { backgroundColor: palette.card, borderColor: palette.border },
-      ]}
+      style={[styles.mapCard, { backgroundColor: palette.card, borderColor: palette.border }]}
     >
       <WebView
         ref={webviewRef}
@@ -504,19 +487,13 @@ function LiveMapCard({
       />
 
       {(!mapReady || !locationReady) && (
-        <View
-          style={[styles.mapLoadingOverlay, { backgroundColor: palette.card }]}
-        >
+        <View style={[styles.mapLoadingOverlay, { backgroundColor: palette.card }]}>
           <ActivityIndicator size="small" color={palette.primary} />
-          <Text style={[styles.mapLoadingText, { color: palette.muted }]}>
-            Locating you…
-          </Text>
+          <Text style={[styles.mapLoadingText, { color: palette.muted }]}>Locating you…</Text>
         </View>
       )}
 
-      <Pressable
-        style={[styles.layersButton, { backgroundColor: palette.card }]}
-      >
+      <Pressable style={[styles.layersButton, { backgroundColor: palette.card }]}>
         <Ionicons name="layers-outline" size={18} color={palette.text} />
       </Pressable>
     </Animated.View>
@@ -526,19 +503,13 @@ function LiveMapCard({
 /* ============================================================
    TASK CARD
 ============================================================ */
-const priorityColor = (
-  priority: TaskPriority,
-  palette: ReturnType<typeof getPalette>,
-) => {
+const priorityColor = (priority: TaskPriority, palette: ReturnType<typeof getPalette>) => {
   if (priority === "High") return palette.danger;
   if (priority === "Medium") return palette.warning;
   return palette.success;
 };
 
-const statusColor = (
-  status: TaskStatus,
-  palette: ReturnType<typeof getPalette>,
-) => {
+const statusColor = (status: TaskStatus, palette: ReturnType<typeof getPalette>) => {
   if (status === "Completed") return palette.success;
   if (status === "In Progress") return palette.secondary;
   return palette.primary;
@@ -556,11 +527,9 @@ const TaskCard = memo(function TaskCard({
   onNavigate: (task: DemoTask) => void;
 }) {
   const scale = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
-  const initial = task.customerName.trim().charAt(0).toUpperCase() || "C";
+  const initial = task.customerName.trim().charAt(0).toUpperCase();
 
   return (
     <Animated.View
@@ -573,31 +542,17 @@ const TaskCard = memo(function TaskCard({
       <View style={styles.taskTopRow}>
         <View style={styles.taskCustomerRow}>
           {task.customerPicture ? (
-            <Image
-              source={{ uri: task.customerPicture }}
-              style={styles.taskAvatarImage}
-            />
+            <Image source={{ uri: task.customerPicture }} style={styles.taskAvatarImage} />
           ) : (
-            <View
-              style={[
-                styles.taskAvatarFallback,
-                { backgroundColor: palette.primary },
-              ]}
-            >
+            <View style={[styles.taskAvatarFallback, { backgroundColor: palette.primary }]}>
               <Text style={styles.taskAvatarFallbackText}>{initial}</Text>
             </View>
           )}
           <View style={{ marginLeft: 10, flexShrink: 1 }}>
-            <Text
-              style={[styles.taskCustomerName, { color: palette.text }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.taskCustomerName, { color: palette.text }]} numberOfLines={1}>
               {task.customerName}
             </Text>
-            <Text
-              style={[styles.taskAddress, { color: palette.muted }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.taskAddress, { color: palette.muted }]} numberOfLines={1}>
               {task.address}
             </Text>
           </View>
@@ -609,12 +564,7 @@ const TaskCard = memo(function TaskCard({
             { backgroundColor: priorityColor(task.priority, palette) + "1A" },
           ]}
         >
-          <Text
-            style={[
-              styles.priorityBadgeText,
-              { color: priorityColor(task.priority, palette) },
-            ]}
-          >
+          <Text style={[styles.priorityBadgeText, { color: priorityColor(task.priority, palette) }]}>
             {task.priority}
           </Text>
         </View>
@@ -623,21 +573,14 @@ const TaskCard = memo(function TaskCard({
       <View style={[styles.taskDivider, { backgroundColor: palette.border }]} />
 
       <View style={styles.taskBottleRow}>
-        <View
-          style={[styles.bottleIconWrap, { backgroundColor: palette.pillBg }]}
-        >
+        <View style={[styles.bottleIconWrap, { backgroundColor: palette.pillBg }]}>
           <Ionicons name="water-outline" size={18} color={palette.secondary} />
         </View>
         <View style={{ marginLeft: 10, flex: 1 }}>
-          <Text
-            style={[styles.bottleName, { color: palette.text }]}
-            numberOfLines={1}
-          >
+          <Text style={[styles.bottleName, { color: palette.text }]} numberOfLines={1}>
             {task.bottleName}
           </Text>
-          <Text style={[styles.bottleQuantity, { color: palette.muted }]}>
-            {task.quantity}
-          </Text>
+          <Text style={[styles.bottleQuantity, { color: palette.muted }]}>{task.quantity}</Text>
         </View>
 
         <View
@@ -646,12 +589,7 @@ const TaskCard = memo(function TaskCard({
             { backgroundColor: statusColor(task.status, palette) + "1A" },
           ]}
         >
-          <Text
-            style={[
-              styles.statusBadgeText,
-              { color: statusColor(task.status, palette) },
-            ]}
-          >
+          <Text style={[styles.statusBadgeText, { color: statusColor(task.status, palette) }]}>
             {task.status}
           </Text>
         </View>
@@ -660,15 +598,11 @@ const TaskCard = memo(function TaskCard({
       <View style={styles.taskMetaRow}>
         <View style={styles.taskMetaItem}>
           <Ionicons name="navigate-outline" size={14} color={palette.muted} />
-          <Text style={[styles.taskMetaText, { color: palette.muted }]}>
-            {task.distanceKm} km
-          </Text>
+          <Text style={[styles.taskMetaText, { color: palette.muted }]}>{task.distanceKm} km</Text>
         </View>
         <View style={styles.taskMetaItem}>
           <Ionicons name="time-outline" size={14} color={palette.muted} />
-          <Text style={[styles.taskMetaText, { color: palette.muted }]}>
-            ETA {task.eta}
-          </Text>
+          <Text style={[styles.taskMetaText, { color: palette.muted }]}>ETA {task.eta}</Text>
         </View>
       </View>
 
@@ -677,10 +611,7 @@ const TaskCard = memo(function TaskCard({
           onPressIn={() => (scale.value = withTiming(0.97, { duration: 100 }))}
           onPressOut={() => (scale.value = withSpring(1, { damping: 12 }))}
           onPress={() => onViewDetails(task.id)}
-          style={[
-            styles.taskButtonPrimary,
-            { backgroundColor: palette.primary },
-          ]}
+          style={[styles.taskButtonPrimary, { backgroundColor: palette.primary }]}
         >
           <Text style={styles.taskButtonPrimaryText}>View Details</Text>
         </Pressable>
@@ -690,11 +621,7 @@ const TaskCard = memo(function TaskCard({
           style={[styles.taskButtonSecondary, { borderColor: palette.border }]}
         >
           <Ionicons name="map-outline" size={16} color={palette.text} />
-          <Text
-            style={[styles.taskButtonSecondaryText, { color: palette.text }]}
-          >
-            Navigate
-          </Text>
+          <Text style={[styles.taskButtonSecondaryText, { color: palette.text }]}>Navigate</Text>
         </Pressable>
       </View>
     </Animated.View>
@@ -722,10 +649,7 @@ function QuickStatCard({
   return (
     <Animated.View
       entering={FadeInDown.duration(450).delay(delay)}
-      style={[
-        styles.statCard,
-        { backgroundColor: palette.card, borderColor: palette.border },
-      ]}
+      style={[styles.statCard, { backgroundColor: palette.card, borderColor: palette.border }]}
     >
       <View style={[styles.statIconWrap, { backgroundColor: color + "1A" }]}>
         <Ionicons name={icon} size={18} color={color} />
@@ -749,12 +673,7 @@ function BottomNav({
   onNavigate: (route: string) => void;
 }) {
   return (
-    <View
-      style={[
-        styles.bottomNav,
-        { backgroundColor: palette.headerBg, borderTopColor: palette.border },
-      ]}
-    >
+    <View style={[styles.bottomNav, { backgroundColor: palette.headerBg, borderTopColor: palette.border }]}>
       {BOTTOM_TABS.map((tab) => {
         const isActive = tab.key === activeKey;
         return (
@@ -791,21 +710,14 @@ function BottomNavItem({
     scale.value = withSpring(isActive ? 1.08 : 1, { damping: 10 });
   }, [isActive]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <Pressable onPress={onPress} style={styles.bottomNavItem}>
       <Animated.View style={animatedStyle}>
         <Ionicons name={icon} size={22} color={color} />
       </Animated.View>
-      <Text
-        style={[
-          styles.bottomNavLabel,
-          { color, fontWeight: isActive ? "700" : "500" },
-        ]}
-      >
+      <Text style={[styles.bottomNavLabel, { color, fontWeight: isActive ? "700" : "500" }]}>
         {label}
       </Text>
     </Pressable>
@@ -822,177 +734,18 @@ export default function DriverDashboardScreen() {
 
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [systemScheme, setSystemScheme] = useState<Scheme>(
-    (Appearance.getColorScheme() as Scheme) || "light",
+    (Appearance.getColorScheme() as Scheme) || "light"
   );
 
-  // Backend state data
-  const [loading, setLoading] = useState(true);
-  const [tasks, setTasks] = useState<DemoTask[]>([]);
-  const [driverName, setDriverName] = useState("Driver");
-  const [profilePicture, setProfilePicture] = useState<string | null>(null);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [stats, setStats] = useState<QuickStats>({
-    todayDeliveries: 0,
-    completed: 0,
-    pending: 0,
-    distanceTravelled: "0.0 km"
-  });
-
-  // Location and tracking state
-  const [coords, setCoords] = useState(FALLBACK_LOCATION);
-  const [locationReady, setLocationReady] = useState(false);
-  const lastPosition = useRef<{ latitude: number; longitude: number } | null>(null);
-
-  const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
-
-  // Live data fetch handlers
-  const fetchDashboardData = async () => {
-    try {
-      setLoading(true);
-      const token = Platform.OS === 'web' 
-        ? localStorage.getItem("kayora_auth_token")
-        : await SecureStore.getItemAsync("kayora_auth_token");
-
-      // Fetch Profile/Driver Info
-      const driverRes = await fetch(`${API_URL}/api/driver/profile`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      });
-      if (driverRes.ok) {
-        const driverData = await driverRes.json();
-        setDriverName(driverData.name || "Driver");
-        setProfilePicture(driverData.profile_picture || null);
-      }
-
-      // Fetch Tasks
-      const tasksRes = await fetch(`${API_URL}/api/driver/tasks`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      });
-      if (tasksRes.ok) {
-        const tasksJson = await tasksRes.json();
-        const fetchedTasks = tasksJson.data || tasksJson;
-        setTasks(fetchedTasks);
-        
-        const active = fetchedTasks.find((t: DemoTask) => t.status === "In Progress");
-        if (active) setActiveTaskId(active.id);
-      }
-
-      // Fetch Dashboard Stats
-      const statsRes = await fetch(`${API_URL}/api/driver/stats`, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      });
-      if (statsRes.ok) {
-        const statsJson = await statsRes.json();
-        setStats(statsJson);
-      }
-    } catch (error) {
-      console.error("Laravel API dashboard fetch issue:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Tracking engine using Haversine formula
   useEffect(() => {
-    let watchSubscription: Location.LocationSubscription | null = null;
-
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") return;
-
-        // Get initial positioning
-        const position = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced
-        });
-        setCoords({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        });
-        lastPosition.current = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        };
-        setLocationReady(true);
-
-        // Real-time position tracking subscription
-        watchSubscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            distanceInterval: 10, // Fire updates when driver moves 10 meters
-            timeInterval: 10000,
-          },
-          async (location) => {
-            const { latitude, longitude } = location.coords;
-            setCoords({ lat: latitude, lng: longitude });
-
-            let distanceDelta = 0;
-            if (lastPosition.current) {
-              distanceDelta = getHaversineDistance(
-                lastPosition.current.latitude,
-                lastPosition.current.longitude,
-                latitude,
-                longitude
-              );
-            }
-
-            lastPosition.current = { latitude, longitude };
-
-            // Emit tracked details to production endpoint
-            const token = Platform.OS === 'web' 
-              ? localStorage.getItem("kayora_auth_token")
-              : await SecureStore.getItemAsync("kayora_auth_token");
-
-            await fetch(`${API_URL}/api/driver/location-update`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-              },
-              body: JSON.stringify({
-                task_id: activeTaskId,
-                latitude,
-                longitude,
-                distance_delta_km: distanceDelta,
-              }),
-            }).catch(() => {});
-          }
-        );
-      } catch (e) {
-        console.error("Tracking setup failure:", e);
-      }
-    })();
-
-    return () => {
-      if (watchSubscription) watchSubscription.remove();
-    };
-  }, [activeTaskId]);
-
-  useEffect(() => {
-    fetchDashboardData();
-
-    (async () => {
-      try {
-        const saved = Platform.OS === 'web'
-          ? localStorage.getItem(THEME_STORAGE_KEY)
-          : await SecureStore.getItemAsync(THEME_STORAGE_KEY);
+        const saved = await SecureStore.getItemAsync(THEME_STORAGE_KEY);
         if (saved === "light" || saved === "dark" || saved === "system") {
-          setThemeMode(saved as ThemeMode);
+          setThemeMode(saved);
         }
       } catch (e) {
-        // Fallback silently
+        // default remains "system"
       }
     })();
 
@@ -1002,8 +755,7 @@ export default function DriverDashboardScreen() {
     return () => subscription.remove();
   }, []);
 
-  const activeScheme: Scheme =
-    themeMode === "system" ? systemScheme : themeMode;
+  const activeScheme: Scheme = themeMode === "system" ? systemScheme : themeMode;
   const palette = useMemo(() => getPalette(activeScheme), [activeScheme]);
 
   const handleCycleTheme = useCallback(async () => {
@@ -1012,11 +764,7 @@ export default function DriverDashboardScreen() {
     const next = order[nextIndex];
     setThemeMode(next);
     try {
-      if (Platform.OS === 'web') {
-        localStorage.setItem(THEME_STORAGE_KEY, next);
-      } else {
-        await SecureStore.setItemAsync(THEME_STORAGE_KEY, next);
-      }
+      await SecureStore.setItemAsync(THEME_STORAGE_KEY, next);
     } catch (e) {
       // ignore persistence failure
     }
@@ -1026,10 +774,7 @@ export default function DriverDashboardScreen() {
   const entranceTranslate = useSharedValue(16);
   useEffect(() => {
     entranceOpacity.value = withTiming(1, { duration: 500 });
-    entranceTranslate.value = withTiming(0, {
-      duration: 500,
-      easing: Easing.out(Easing.quad),
-    });
+    entranceTranslate.value = withTiming(0, { duration: 500, easing: Easing.out(Easing.quad) });
   }, []);
   const contentEntrance = useAnimatedStyle(() => ({
     opacity: entranceOpacity.value,
@@ -1040,7 +785,7 @@ export default function DriverDashboardScreen() {
     (route: string) => {
       router.push(route as any);
     },
-    [router],
+    [router]
   );
 
   const handleBottomNavNavigate = useCallback(
@@ -1048,7 +793,7 @@ export default function DriverDashboardScreen() {
       if (route === "/driver/dashboard") return;
       router.push(route as any);
     },
-    [router],
+    [router]
   );
 
   const handleOpenProfile = useCallback(() => {
@@ -1056,7 +801,7 @@ export default function DriverDashboardScreen() {
   }, [router]);
 
   const handleOpenNotifications = useCallback(() => {
-    // Notification page implementation reference
+    // Notification page will be built later.
   }, []);
 
   const handleViewAllTasks = useCallback(() => {
@@ -1067,30 +812,28 @@ export default function DriverDashboardScreen() {
     (id: string) => {
       router.push(`/driver/tasks/${id}` as any);
     },
-    [router],
+    [router]
   );
 
   const handleNavigateToTask = useCallback((task: DemoTask) => {
     const url = Platform.select({
       ios: `http://maps.apple.com/?daddr=${task.lat},${task.lng}`,
       android: `geo:${task.lat},${task.lng}?q=${task.lat},${task.lng}(${encodeURIComponent(
-        task.customerName,
+        task.customerName
       )})`,
       default: `https://www.openstreetmap.org/?mlat=${task.lat}&mlon=${task.lng}#map=16/${task.lat}/${task.lng}`,
     });
     if (url) Linking.openURL(url).catch(() => {});
   }, []);
 
+  const completedCount = DEMO_TASKS.filter((t) => t.status === "Completed").length;
+  const pendingCount = DEMO_TASKS.filter((t) => t.status !== "Completed").length;
+
   return (
-    <SafeAreaView
-      style={[styles.safeArea, { backgroundColor: palette.background }]}
-      edges={["top", "left", "right"]}
-    >
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
       <DashboardHeader
         palette={palette}
         themeMode={themeMode}
-        driverName={driverName}
-        profilePicture={profilePicture}
         onCycleTheme={handleCycleTheme}
         onOpenNotifications={handleOpenNotifications}
         onOpenProfile={handleOpenProfile}
@@ -1109,44 +852,31 @@ export default function DriverDashboardScreen() {
         <Animated.View style={contentEntrance}>
           <WorkStatusCard palette={palette} />
 
-          <LiveMapCard palette={palette} currentCoords={coords} locationReady={locationReady} />
+          <LiveMapCard palette={palette} />
 
           <View style={styles.sectionHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: palette.text }]}>
-              Today's Active Tasks
-            </Text>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>Today's Active Tasks</Text>
             <Pressable onPress={handleViewAllTasks} hitSlop={8}>
-              <Text style={[styles.sectionAction, { color: palette.primary }]}>
-                View All →
-              </Text>
+              <Text style={[styles.sectionAction, { color: palette.primary }]}>View All →</Text>
             </Pressable>
           </View>
 
-          {loading ? (
-            <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 20 }} />
-          ) : (
-            <FlatList
-              data={tasks}
-              keyExtractor={(item) => item.id}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <TaskCard
-                  task={item}
-                  palette={palette}
-                  onViewDetails={handleViewTaskDetails}
-                  onNavigate={handleNavigateToTask}
-                />
-              )}
-              ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
-            />
-          )}
+          <FlatList
+            data={DEMO_TASKS}
+            keyExtractor={(item) => item.id}
+            scrollEnabled={false}
+            renderItem={({ item }) => (
+              <TaskCard
+                task={item}
+                palette={palette}
+                onViewDetails={handleViewTaskDetails}
+                onNavigate={handleNavigateToTask}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
+          />
 
-          <Text
-            style={[
-              styles.sectionTitle,
-              { color: palette.text, marginTop: 26, marginBottom: 14 },
-            ]}
-          >
+          <Text style={[styles.sectionTitle, { color: palette.text, marginTop: 26, marginBottom: 14 }]}>
             Quick Stats
           </Text>
 
@@ -1154,7 +884,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="cube-outline"
               label="Today's Deliveries"
-              value={String(stats.todayDeliveries)}
+              value={String(DEMO_TASKS.length)}
               color={palette.primary}
               palette={palette}
               delay={0}
@@ -1162,7 +892,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="checkmark-done-outline"
               label="Completed"
-              value={String(stats.completed)}
+              value={String(completedCount)}
               color={palette.success}
               palette={palette}
               delay={60}
@@ -1170,7 +900,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="hourglass-outline"
               label="Pending"
-              value={String(stats.pending)}
+              value={String(pendingCount)}
               color={palette.warning}
               palette={palette}
               delay={120}
@@ -1178,7 +908,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="speedometer-outline"
               label="Distance Travelled"
-              value={stats.distanceTravelled}
+              value="18.6 km"
               color={palette.secondary}
               palette={palette}
               delay={180}
@@ -1189,11 +919,7 @@ export default function DriverDashboardScreen() {
         </Animated.View>
       </ScrollView>
 
-      <BottomNav
-        palette={palette}
-        activeKey="dashboard"
-        onNavigate={handleBottomNavNavigate}
-      />
+      <BottomNav palette={palette} activeKey="dashboard" onNavigate={handleBottomNavNavigate} />
     </SafeAreaView>
   );
 }
@@ -1350,7 +1076,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   mapLoadingOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
   },
