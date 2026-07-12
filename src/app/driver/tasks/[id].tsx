@@ -1,40 +1,29 @@
-import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import * as SecureStore from "expo-secure-store";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Appearance,
-    KeyboardAvoidingView,
-    Linking,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    useWindowDimensions,
-    View,
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  Linking,
+  ActivityIndicator,
+  StyleSheet,
+  Appearance,
 } from "react-native";
-import Animated, {
-    Easing,
-    FadeInDown,
-    useAnimatedStyle,
-    useSharedValue,
-    withTiming,
-    ZoomIn
-} from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import Animated, { FadeInDown, FadeIn, ZoomIn } from "react-native-reanimated";
+import * as SecureStore from "expo-secure-store";
+import { DriverDashboardService } from "../../../services/driverDashboard";
+import { DriverTask } from "../../../types/driverTask";
+import TaskMapPreview from "../../../components/TaskMapPreview";
 
 /* ============================================================
-   BRAND COLORS
+   BRAND COLORS (matches the rest of the driver app)
 ============================================================ */
 const BRAND = {
   primary: "#0D4A8C",
   secondary: "#1E5FAF",
-  gold: "#D4A64A",
   background: "#FFFFFF",
   backgroundDark: "#071D38",
   card: "#F8FAFC",
@@ -47,35 +36,10 @@ const BRAND = {
   mutedDark: "#93A4BC",
   success: "#22C55E",
   warning: "#F59E0B",
-  completed: "#10B981",
   danger: "#EF4444",
 };
 
-type ThemeMode = "light" | "dark" | "system";
 type Scheme = "light" | "dark";
-type TaskPriority = "High" | "Medium" | "Low";
-type TaskStatus = "Scheduled" | "In Progress" | "Completed";
-type PaymentMethod = "Cash" | "Card" | "Transfer";
-
-interface Task {
-  id: string;
-  orderId: string;
-  customerName: string;
-  customerPhone: string;
-  customerPicture: string | null;
-  address: string;
-  bottleName: string;
-  bottleSize: string;
-  quantity: string;
-  paymentMethod: PaymentMethod;
-  priority: TaskPriority;
-  status: TaskStatus;
-  deliveryTime: string;
-  notes?: string;
-  assignedAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-}
 
 function getPalette(scheme: Scheme) {
   const isDark = scheme === "dark";
@@ -88,997 +52,380 @@ function getPalette(scheme: Scheme) {
     muted: isDark ? BRAND.mutedDark : BRAND.muted,
     primary: BRAND.primary,
     secondary: BRAND.secondary,
-    gold: BRAND.gold,
     success: BRAND.success,
     warning: BRAND.warning,
-    completed: BRAND.completed,
     danger: BRAND.danger,
-    headerBg: isDark ? "#0A2645" : BRAND.background,
     pillBg: isDark ? "#12335C" : "#EEF3FA",
-    modalBg: isDark ? "#0E2D52" : "#FFFFFF",
   };
 }
 
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 
+function formatNaira(amount: number) {
+  return `₦${amount.toLocaleString("en-NG")}`;
+}
+
 /* ============================================================
-   HELPERS
+   CONFIRM DIALOG (matches pattern used elsewhere in the driver app)
 ============================================================ */
-function priorityColor(
-  priority: TaskPriority,
-  palette: ReturnType<typeof getPalette>,
-) {
-  if (priority === "High") return palette.danger;
-  if (priority === "Medium") return palette.warning;
-  return palette.success;
+function ConfirmDialog({
+  visible,
+  palette,
+  title,
+  message,
+  loading,
+  onYes,
+  onNo,
+}: {
+  visible: boolean;
+  palette: ReturnType<typeof getPalette>;
+  title: string;
+  message: string;
+  loading: boolean;
+  onYes: () => void;
+  onNo: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <View style={styles.confirmOverlay}>
+      <Animated.View entering={ZoomIn.duration(220)} style={[styles.confirmCard, { backgroundColor: palette.card }]}>
+        <Text style={[styles.confirmTitle, { color: palette.text }]}>{title}</Text>
+        <Text style={[styles.confirmMessage, { color: palette.muted }]}>{message}</Text>
+        <View style={styles.confirmButtonsRow}>
+          <Pressable onPress={onNo} disabled={loading} style={[styles.confirmButtonNo, { borderColor: palette.border }]}>
+            <Text style={[styles.confirmButtonNoText, { color: palette.text }]}>No</Text>
+          </Pressable>
+          <Pressable onPress={onYes} disabled={loading} style={[styles.confirmButtonYes, { backgroundColor: palette.primary }]}>
+            {loading ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.confirmButtonYesText}>Yes</Text>}
+          </Pressable>
+        </View>
+      </Animated.View>
+    </View>
+  );
 }
 
-function statusColor(
-  status: TaskStatus,
-  palette: ReturnType<typeof getPalette>,
-) {
-  if (status === "Completed") return palette.completed;
-  if (status === "In Progress") return palette.secondary;
-  return palette.primary;
+function SuccessOverlay({ visible, palette, message }: { visible: boolean; palette: ReturnType<typeof getPalette>; message: string }) {
+  if (!visible) return null;
+  return (
+    <Animated.View entering={FadeIn.duration(200)} style={styles.successOverlay}>
+      <Animated.View entering={ZoomIn.duration(300)} style={[styles.successCard, { backgroundColor: palette.card }]}>
+        <View style={[styles.successCircle, { backgroundColor: palette.success }]}>
+          <Ionicons name="checkmark" size={36} color="#FFFFFF" />
+        </View>
+        <Text style={[styles.successMessage, { color: palette.text }]}>{message}</Text>
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+function DetailRow({ label, value, palette }: { label: string; value: string; palette: ReturnType<typeof getPalette> }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={[styles.detailLabel, { color: palette.muted }]}>{label}</Text>
+      <Text style={[styles.detailValue, { color: palette.text }]}>{value}</Text>
+    </View>
+  );
 }
 
 /* ============================================================
-   TASK DETAILS SCREEN
+   MAIN SCREEN
 ============================================================ */
 export default function TaskDetailsScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { width } = useWindowDimensions();
-  const isWideScreen = width >= 720;
 
-  /* Theme */
-  const colorScheme = Appearance.useColorScheme() ?? "light";
-  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
-  const palette = useMemo(
-    () =>
-      getPalette(
-        themeMode === "system"
-          ? colorScheme
-          : themeMode === "light"
-            ? "light"
-            : "dark",
-      ),
-    [themeMode, colorScheme],
-  );
-
-  /* State */
-  const [task, setTask] = useState<Task | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [confirmVisible, setConfirmVisible] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<
-    "start" | "complete" | null
-  >(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  /* Animations */
-  const entranceOpacity = useSharedValue(0);
-  const entranceTranslate = useSharedValue(16);
-
-  /* Load theme from storage */
+  const [scheme, setScheme] = useState<Scheme>((Appearance.getColorScheme() as Scheme) || "light");
   useEffect(() => {
     (async () => {
-      try {
-        const stored = await SecureStore.getItemAsync(THEME_STORAGE_KEY);
-        if (stored) setThemeMode(stored as ThemeMode);
-      } catch (e) {
-        console.warn("Theme preference not found", e);
-      }
+      const saved = await SecureStore.getItemAsync(THEME_STORAGE_KEY).catch(() => null);
+      if (saved === "light" || saved === "dark") setScheme(saved);
     })();
   }, []);
+  const palette = useMemo(() => getPalette(scheme), [scheme]);
 
-  /* Load task data */
-  useEffect(() => {
-    fetchTaskDetails();
-  }, [id]);
+  const [task, setTask] = useState<DriverTask | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  /* Entrance animation */
-  useEffect(() => {
-    entranceOpacity.value = withTiming(1, { duration: 450 });
-    entranceTranslate.value = withTiming(0, {
-      duration: 450,
-      easing: Easing.out(Easing.quad),
-    });
-  }, []);
+  const [confirmAction, setConfirmAction] = useState<"start" | "complete" | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const fetchTaskDetails = useCallback(async () => {
+  const loadTask = useCallback(async () => {
+    if (!id) return;
+    setLoading(true);
+    setErrorMessage(null);
     try {
-      setLoading(true);
-      setError(null);
-
-      // For demo purposes, we're using mock data
-      // In production, fetch from your API using the task ID
-      const mockTasks: Record<string, Task> = {
-        "1": {
-          id: "1",
-          orderId: "ORD-2024-001",
-          customerName: "John Doe",
-          customerPhone: "+1 (555) 123-4567",
-          customerPicture: null,
-          address: "123 Main St, Apartment 4B, New York, NY 10001",
-          bottleName: "Premium Spring Water",
-          bottleSize: "5L",
-          quantity: "3",
-          paymentMethod: "Cash",
-          priority: "High",
-          status: "Scheduled",
-          deliveryTime: "2:30 PM - 3:00 PM",
-          notes: "Please ring doorbell twice. Apartment is on 4th floor.",
-          assignedAt: "Today at 9:00 AM",
-        },
-        "2": {
-          id: "2",
-          orderId: "ORD-2024-002",
-          customerName: "Jane Smith",
-          customerPhone: "+1 (555) 987-6543",
-          customerPicture: null,
-          address: "456 Oak Ave, Suite 200, Los Angeles, CA 90001",
-          bottleName: "Mineral Water",
-          bottleSize: "20L",
-          quantity: "2",
-          paymentMethod: "Card",
-          priority: "Medium",
-          status: "In Progress",
-          deliveryTime: "1:00 PM - 1:30 PM",
-          startedAt: "Today at 12:55 PM",
-        },
-      };
-
-      const foundTask = mockTasks[id || "1"];
-      if (foundTask) {
-        setTask(foundTask);
-      } else {
-        setError("Task not found");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load task");
+      const result = await DriverDashboardService.getTaskById(id);
+      setTask(result);
+    } catch (e) {
+      setErrorMessage("Could not load this order. Pull down to try again.");
     } finally {
       setLoading(false);
     }
   }, [id]);
 
-  const handleStartTask = useCallback(() => {
-    setConfirmAction("start");
-    setConfirmVisible(true);
-  }, []);
-
-  const handleCompleteTask = useCallback(() => {
-    setConfirmAction("complete");
-    setConfirmVisible(true);
-  }, []);
+  useEffect(() => {
+    loadTask();
+  }, [loadTask]);
 
   const handleConfirmAction = useCallback(async () => {
-    setConfirmVisible(false);
+    if (!task || !confirmAction) return;
     setActionLoading(true);
-
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      if (confirmAction === "start" && task) {
-        setTask({ ...task, status: "In Progress", startedAt: "Now" });
-        setSuccessMessage("Task started successfully!");
-      } else if (confirmAction === "complete" && task) {
-        setTask({ ...task, status: "Completed", completedAt: "Now" });
-        setSuccessMessage("Task completed successfully!");
-      }
-
-      setTimeout(() => setSuccessMessage(null), 2000);
-    } catch (err) {
-      Alert.alert("Error", "Failed to update task status");
+      const updated =
+        confirmAction === "start"
+          ? await DriverDashboardService.startTask(task.id)
+          : await DriverDashboardService.completeTask(task.id);
+      setTask(updated);
+      setConfirmAction(null);
+      setSuccessMessage(confirmAction === "start" ? "Delivery Started" : "Delivery Completed");
+      setTimeout(() => setSuccessMessage(null), 1500);
+    } catch (e) {
+      setErrorMessage("Could not update this order. Please try again.");
+      setConfirmAction(null);
     } finally {
       setActionLoading(false);
     }
-  }, [confirmAction, task]);
+  }, [task, confirmAction]);
 
-  const handleCall = useCallback(() => {
-    if (task?.customerPhone) {
-      Linking.openURL(`tel:${task.customerPhone}`);
-    }
-  }, [task?.customerPhone]);
-
-  const handleMessage = useCallback(() => {
-    if (task?.customerPhone) {
-      Linking.openURL(`sms:${task.customerPhone}`);
-    }
-  }, [task?.customerPhone]);
-
-  const handleCycleTheme = useCallback(async () => {
-    const nextMode =
-      themeMode === "light"
-        ? "dark"
-        : themeMode === "dark"
-          ? "system"
-          : "light";
-    setThemeMode(nextMode);
-    await SecureStore.setItemAsync(THEME_STORAGE_KEY, nextMode);
-  }, [themeMode]);
-
-  const contentEntrance = useAnimatedStyle(() => ({
-    opacity: entranceOpacity.value,
-    transform: [{ translateY: entranceTranslate.value }],
-  }));
+  const handleOpenInMaps = () => {
+    if (!task) return;
+    // Was opening OpenStreetMap externally — now opens the in-app map
+    // showing all of today's stops, focused/popup-opened on this one.
+    router.push(`/driver/maps?focusId=${task.id}` as any);
+  };
 
   if (loading) {
     return (
-      <SafeAreaView
-        style={[styles.safeArea, { backgroundColor: palette.background }]}
-      >
-        <View style={styles.centerContainer}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
+        <View style={styles.centerFill}>
           <ActivityIndicator size="large" color={palette.primary} />
         </View>
       </SafeAreaView>
     );
   }
 
-  if (error || !task) {
+  if (!task) {
     return (
-      <SafeAreaView
-        style={[styles.safeArea, { backgroundColor: palette.background }]}
-      >
-        <View style={styles.headerRow}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Ionicons name="chevron-back" size={24} color={palette.text} />
-          </Pressable>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>
-            Task Details
-          </Text>
-          <View style={{ width: 24 }} />
-        </View>
-        <View style={styles.centerContainer}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={48}
-            color={palette.danger}
-          />
-          <Text style={[styles.errorText, { color: palette.text }]}>
-            {error || "Task not found"}
-          </Text>
-          <Pressable
-            onPress={() => router.back()}
-            style={[styles.errorButton, { backgroundColor: palette.primary }]}
-          >
-            <Text style={styles.errorButtonText}>Go Back</Text>
-          </Pressable>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
+        <View style={styles.centerFill}>
+          <Ionicons name="alert-circle-outline" size={40} color={palette.muted} />
+          <Text style={[styles.errorText, { color: palette.muted }]}>{errorMessage ?? "Order not found."}</Text>
+<Pressable
+  onPress={() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/driver/dashboard");
+    }
+  }}
+  style={[styles.backLinkButton, { backgroundColor: palette.primary }]}
+>
+  <Text style={styles.backLinkButtonText}>Go Back</Text>
+</Pressable>
         </View>
       </SafeAreaView>
     );
   }
 
-  const confirmMessage =
-    confirmAction === "start"
-      ? "Are you sure you want to start this task?"
-      : "Are you sure you want to mark this task as completed?";
-
-  const confirmTitle =
-    confirmAction === "start" ? "Start Task" : "Complete Task";
+  const initial = task.customerName.trim().charAt(0).toUpperCase();
+  const canStart = task.status === "Assigned" || task.status === "Preparing";
+  const canComplete = task.status === "Out For Delivery";
+  const isDelivered = task.status === "Delivered";
 
   return (
-    <SafeAreaView
-      style={[styles.safeArea, { backgroundColor: palette.background }]}
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        {/* Header */}
-        <View style={[styles.headerRow, { borderBottomColor: palette.border }]}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Ionicons name="chevron-back" size={24} color={palette.text} />
-          </Pressable>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>
-            Task Details
-          </Text>
-          <Pressable onPress={handleCycleTheme} hitSlop={10}>
-            <Ionicons
-              name={
-                themeMode === "light"
-                  ? "sunny-outline"
-                  : themeMode === "dark"
-                    ? "moon-outline"
-                    : "contrast-outline"
-              }
-              size={20}
-              color={palette.text}
-            />
-          </Pressable>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "bottom"]}>
+      <View style={[styles.headerRow, { borderBottomColor: palette.border }]}>
+<Pressable
+  onPress={() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/driver/dashboard");
+    }
+  }}
+  style={[styles.backLinkButton, { backgroundColor: palette.primary }]}
+>
+  <Text style={styles.backLinkButtonText}>Go Back</Text>
+</Pressable>
+        <View style={{ marginLeft: 12 }}>
+          <Text style={[styles.headerTitle, { color: palette.text }]}>Order #{task.orderNumber}</Text>
+          <Text style={[styles.headerSubtitle, { color: palette.muted }]}>{task.status}</Text>
         </View>
+      </View>
 
-        <ScrollView
-          style={{ flex: 1, backgroundColor: palette.background }}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingHorizontal: isWideScreen ? 32 : 16 },
-          ]}
-          showsVerticalScrollIndicator={false}
-        >
-          <Animated.View style={contentEntrance}>
-            {/* Order Header */}
-            <Animated.View
-              entering={FadeInDown.duration(400)}
-              style={[
-                styles.orderHeaderCard,
-                {
-                  backgroundColor: palette.card,
-                  borderColor: palette.border,
-                  borderTopColor: statusColor(task.status, palette),
-                  borderTopWidth: 4,
-                },
-              ]}
-            >
-              <View style={styles.orderHeaderTop}>
-                <View>
-                  <Text style={[styles.orderIdLabel, { color: palette.muted }]}>
-                    ORDER ID
-                  </Text>
-                  <Text style={[styles.orderIdText, { color: palette.text }]}>
-                    {task.orderId}
-                  </Text>
-                </View>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    {
-                      backgroundColor: `${statusColor(task.status, palette)}15`,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.statusBadgeText,
-                      { color: statusColor(task.status, palette) },
-                    ]}
-                  >
-                    {task.status}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={[styles.divider, { borderColor: palette.border }]} />
-
-              <View style={styles.orderHeaderBottom}>
-                <View style={styles.metaItem}>
-                  <Ionicons
-                    name="time-outline"
-                    size={14}
-                    color={palette.muted}
-                  />
-                  <Text style={[styles.metaLabel, { color: palette.muted }]}>
-                    Assigned
-                  </Text>
-                  <Text style={[styles.metaValue, { color: palette.text }]}>
-                    {task.assignedAt}
-                  </Text>
-                </View>
-                <View style={styles.metaItem}>
-                  <Ionicons
-                    name={
-                      task.priority === "High"
-                        ? "alert-circle"
-                        : task.priority === "Medium"
-                          ? "alert-outline"
-                          : "checkmark-circle-outline"
-                    }
-                    size={14}
-                    color={priorityColor(task.priority, palette)}
-                  />
-                  <Text style={[styles.metaLabel, { color: palette.muted }]}>
-                    Priority
-                  </Text>
-                  <Text
-                    style={[
-                      styles.metaValue,
-                      { color: priorityColor(task.priority, palette) },
-                    ]}
-                  >
-                    {task.priority}
-                  </Text>
-                </View>
-              </View>
-            </Animated.View>
-
-            {/* Customer Info */}
-            <Animated.View
-              entering={FadeInDown.duration(450)}
-              style={[
-                styles.section,
-                { backgroundColor: palette.card, borderColor: palette.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: palette.text }]}>
-                Customer Information
-              </Text>
-
-              <View style={styles.customerInfoBox}>
-                <View
-                  style={[
-                    styles.customerAvatar,
-                    { backgroundColor: palette.primary },
-                  ]}
-                >
-                  <Text style={styles.customerAvatarText}>
-                    {(task.customerName || "C").charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.customerName, { color: palette.text }]}>
-                    {task.customerName}
-                  </Text>
-                  <Text
-                    style={[styles.customerPhone, { color: palette.muted }]}
-                  >
-                    {task.customerPhone}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.contactButtonsRow}>
-                <Pressable
-                  onPress={handleCall}
-                  style={[
-                    styles.contactButton,
-                    { backgroundColor: palette.primary },
-                  ]}
-                >
-                  <Ionicons name="call" size={18} color="#FFFFFF" />
-                  <Text style={styles.contactButtonText}>Call</Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={handleMessage}
-                  style={[
-                    styles.contactButton,
-                    { backgroundColor: palette.secondary },
-                  ]}
-                >
-                  <Ionicons name="chatbubble" size={18} color="#FFFFFF" />
-                  <Text style={styles.contactButtonText}>Message</Text>
-                </Pressable>
-              </View>
-            </Animated.View>
-
-            {/* Delivery Details */}
-            <Animated.View
-              entering={FadeInDown.duration(500)}
-              style={[
-                styles.section,
-                { backgroundColor: palette.card, borderColor: palette.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: palette.text }]}>
-                Delivery Details
-              </Text>
-
-              <View style={styles.detailRow}>
-                <Ionicons
-                  name="location-outline"
-                  size={20}
-                  color={palette.primary}
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[styles.detailLabel, { color: palette.muted }]}>
-                    Delivery Address
-                  </Text>
-                  <Text style={[styles.detailValue, { color: palette.text }]}>
-                    {task.address}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={[styles.divider, { borderColor: palette.border }]} />
-
-              <View style={styles.detailRow}>
-                <Ionicons
-                  name="water-outline"
-                  size={20}
-                  color={palette.secondary}
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[styles.detailLabel, { color: palette.muted }]}>
-                    Product
-                  </Text>
-                  <Text style={[styles.detailValue, { color: palette.text }]}>
-                    {task.bottleName} ({task.bottleSize})
-                  </Text>
-                  <Text style={[styles.detailValue, { color: palette.muted }]}>
-                    Quantity: {task.quantity}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={[styles.divider, { borderColor: palette.border }]} />
-
-              <View style={styles.detailRow}>
-                <Ionicons
-                  name="time-outline"
-                  size={20}
-                  color={palette.warning}
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[styles.detailLabel, { color: palette.muted }]}>
-                    Delivery Time
-                  </Text>
-                  <Text style={[styles.detailValue, { color: palette.text }]}>
-                    {task.deliveryTime}
-                  </Text>
-                </View>
-              </View>
-            </Animated.View>
-
-            {/* Payment Information */}
-            <Animated.View
-              entering={FadeInDown.duration(550)}
-              style={[
-                styles.section,
-                { backgroundColor: palette.card, borderColor: palette.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: palette.text }]}>
-                Payment Method
-              </Text>
-
-              <View style={styles.detailRow}>
-                <Ionicons name="card-outline" size={20} color={palette.gold} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[styles.detailLabel, { color: palette.muted }]}>
-                    Payment Type
-                  </Text>
-                  <Text style={[styles.detailValue, { color: palette.text }]}>
-                    {task.paymentMethod}
-                  </Text>
-                </View>
-              </View>
-            </Animated.View>
-
-            {/* Notes */}
-            {task.notes && (
-              <Animated.View
-                entering={FadeInDown.duration(600)}
-                style={[
-                  styles.section,
-                  {
-                    backgroundColor: palette.pillBg,
-                    borderColor: palette.border,
-                  },
-                ]}
-              >
-                <Text style={[styles.sectionTitle, { color: palette.text }]}>
-                  Special Notes
-                </Text>
-                <Text style={[styles.notesText, { color: palette.text }]}>
-                  {task.notes}
-                </Text>
-              </Animated.View>
-            )}
-
-            {/* Action Buttons */}
-            <Animated.View entering={FadeInDown.duration(650)}>
-              {task.status === "Scheduled" && (
-                <Pressable
-                  onPress={handleStartTask}
-                  disabled={actionLoading}
-                  style={[
-                    styles.actionButton,
-                    {
-                      backgroundColor: palette.primary,
-                      opacity: actionLoading ? 0.6 : 1,
-                    },
-                  ]}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="play-circle" size={18} color="#FFFFFF" />
-                      <Text style={styles.actionButtonText}>Start Task</Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
-
-              {task.status === "In Progress" && (
-                <Pressable
-                  onPress={handleCompleteTask}
-                  disabled={actionLoading}
-                  style={[
-                    styles.actionButton,
-                    {
-                      backgroundColor: palette.completed,
-                      opacity: actionLoading ? 0.6 : 1,
-                    },
-                  ]}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={18}
-                        color="#FFFFFF"
-                      />
-                      <Text style={styles.actionButtonText}>Complete Task</Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
-
-              {task.status === "Completed" && (
-                <View
-                  style={[
-                    styles.completedMessage,
-                    {
-                      backgroundColor: `${palette.completed}15`,
-                      borderColor: palette.completed,
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name="checkmark-done"
-                    size={18}
-                    color={palette.completed}
-                  />
-                  <Text
-                    style={[
-                      styles.completedMessageText,
-                      { color: palette.completed },
-                    ]}
-                  >
-                    Task completed at {task.completedAt}
-                  </Text>
-                </View>
-              )}
-            </Animated.View>
-
-            <View style={{ height: 24 }} />
-          </Animated.View>
-        </ScrollView>
-
-        {/* Confirm Dialog */}
-        <Modal
-          visible={confirmVisible}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setConfirmVisible(false)}
-        >
-          <BlurView intensity={90} style={styles.confirmOverlay}>
-            <Animated.View
-              entering={ZoomIn.duration(220)}
-              style={[styles.confirmCard, { backgroundColor: palette.modalBg }]}
-            >
-              <Text style={[styles.confirmTitle, { color: palette.text }]}>
-                {confirmTitle}
-              </Text>
-              <Text style={[styles.confirmMessage, { color: palette.muted }]}>
-                {confirmMessage}
-              </Text>
-              <View style={styles.confirmButtonsRow}>
-                <Pressable
-                  onPress={() => setConfirmVisible(false)}
-                  disabled={actionLoading}
-                  style={[
-                    styles.confirmButtonNo,
-                    {
-                      borderColor: palette.border,
-                      opacity: actionLoading ? 0.6 : 1,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.confirmButtonNoText,
-                      { color: palette.text },
-                    ]}
-                  >
-                    Cancel
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleConfirmAction}
-                  disabled={actionLoading}
-                  style={[
-                    styles.confirmButtonYes,
-                    {
-                      backgroundColor: palette.primary,
-                      opacity: actionLoading ? 0.6 : 1,
-                    },
-                  ]}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.confirmButtonYesText}>Confirm</Text>
-                  )}
-                </Pressable>
-              </View>
-            </Animated.View>
-          </BlurView>
-        </Modal>
-
-        {/* Success Message */}
-        {successMessage && (
-          <View
-            style={[
-              styles.successMessage,
-              { backgroundColor: palette.completed },
-            ]}
-          >
-            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-            <Text style={styles.successMessageText}>{successMessage}</Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {errorMessage && (
+          <View style={[styles.errorBanner, { backgroundColor: palette.danger + "1A" }]}>
+            <Text style={[styles.errorBannerText, { color: palette.danger }]}>{errorMessage}</Text>
           </View>
         )}
-      </KeyboardAvoidingView>
+
+        {/* ---------- Map ---------- */}
+        <Animated.View entering={FadeInDown.duration(400)} style={[styles.mapWrap, { borderColor: palette.border }]}>
+          <TaskMapPreview latitude={task.latitude} longitude={task.longitude} isDark={palette.scheme === "dark"} />
+          <Pressable onPress={handleOpenInMaps} style={[styles.navigateButton, { backgroundColor: palette.card }]}>
+            <Ionicons name="navigate-outline" size={17} color={palette.primary} />
+          </Pressable>
+        </Animated.View>
+
+        {/* ---------- Customer Info ---------- */}
+        <Animated.View entering={FadeInDown.duration(400).delay(60)} style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+          <Text style={[styles.sectionTitle, { color: palette.text }]}>Customer Information</Text>
+          <View style={styles.customerRow}>
+            <View style={[styles.avatar, { backgroundColor: palette.primary }]}>
+              <Text style={styles.avatarText}>{initial}</Text>
+            </View>
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={[styles.customerName, { color: palette.text }]}>{task.customerName}</Text>
+              <Text style={[styles.customerAddress, { color: palette.muted }]}>{task.deliveryAddress}</Text>
+            </View>
+          </View>
+          {task.nearestLandmark && <DetailRow label="Landmark" value={task.nearestLandmark} palette={palette} />}
+          <View style={styles.contactButtonsRow}>
+            <Pressable onPress={() => Linking.openURL(`tel:${task.customerPhone}`)} style={[styles.contactButton, { backgroundColor: palette.primary }]}>
+              <Ionicons name="call-outline" size={15} color="#FFFFFF" />
+              <Text style={styles.contactButtonText}>Call</Text>
+            </Pressable>
+            <Pressable onPress={() => Linking.openURL(`sms:${task.customerPhone}`)} style={[styles.contactButtonGhost, { borderColor: palette.border }]}>
+              <Ionicons name="chatbubble-outline" size={15} color={palette.text} />
+              <Text style={[styles.contactButtonGhostText, { color: palette.text }]}>Message</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+
+        {/* ---------- Ordered Products ---------- */}
+        <Animated.View entering={FadeInDown.duration(400).delay(120)} style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+          <Text style={[styles.sectionTitle, { color: palette.text }]}>Ordered Products</Text>
+          {task.items.map((item, index) => (
+            <View key={item.id} style={[styles.productRow, index !== task.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: palette.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.productName, { color: palette.text }]}>{item.bottleName}</Text>
+                <Text style={[styles.productMeta, { color: palette.muted }]}>{item.size} · Qty {item.quantity}</Text>
+              </View>
+              <Text style={[styles.productSubtotal, { color: palette.text }]}>{formatNaira(item.subtotal)}</Text>
+            </View>
+          ))}
+          <View style={[styles.totalRow, { borderTopColor: palette.border }]}>
+            <Text style={[styles.totalLabel, { color: palette.muted }]}>Total</Text>
+            <Text style={[styles.totalValue, { color: palette.text }]}>{formatNaira(task.amount)}</Text>
+          </View>
+        </Animated.View>
+
+        {/* ---------- Delivery Info ---------- */}
+        <Animated.View entering={FadeInDown.duration(400).delay(180)} style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+          <Text style={[styles.sectionTitle, { color: palette.text }]}>Delivery Information</Text>
+          <DetailRow label="Priority" value={task.priority} palette={palette} />
+          <DetailRow label="Payment Method" value={task.paymentMethod ?? "—"} palette={palette} />
+          <DetailRow label="Payment Status" value={task.paymentStatus ?? "—"} palette={palette} />
+          <DetailRow label="Distance" value={task.distanceKm != null ? `${task.distanceKm} km` : "—"} palette={palette} />
+          <DetailRow label="ETA" value={task.eta ?? "—"} palette={palette} />
+          {task.specialInstructions && <DetailRow label="Notes" value={task.specialInstructions} palette={palette} />}
+        </Animated.View>
+
+        {/* ---------- Actions ---------- */}
+        {!isDelivered && (
+          <View style={styles.actionsRow}>
+            {canStart && (
+              <Pressable onPress={() => setConfirmAction("start")} style={[styles.actionButton, { backgroundColor: palette.secondary }]}>
+                <Ionicons name="play-outline" size={16} color="#FFFFFF" />
+                <Text style={styles.actionButtonText}>Start Delivery</Text>
+              </Pressable>
+            )}
+            {canComplete && (
+              <Pressable onPress={() => setConfirmAction("complete")} style={[styles.actionButton, { backgroundColor: palette.success }]}>
+                <Ionicons name="checkmark-done-outline" size={16} color="#FFFFFF" />
+                <Text style={styles.actionButtonText}>Complete Delivery</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
+        <View style={{ height: 24 }} />
+      </ScrollView>
+
+      <ConfirmDialog
+        visible={!!confirmAction}
+        palette={palette}
+        title={confirmAction === "start" ? "Start this delivery?" : "Complete this delivery?"}
+        message={
+          confirmAction === "start"
+            ? "This marks the order as Out For Delivery."
+            : "This marks the order as Delivered and cannot be undone."
+        }
+        loading={actionLoading}
+        onYes={handleConfirmAction}
+        onNo={() => setConfirmAction(null)}
+      />
+
+      <SuccessOverlay visible={!!successMessage} palette={palette} message={successMessage ?? ""} />
     </SafeAreaView>
   );
 }
 
-/* ============================================================
-   STYLES
-============================================================ */
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  scrollContent: {
-    paddingVertical: 16,
-  },
-  orderHeaderCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 16,
-  },
-  orderHeaderTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
-  },
-  orderIdLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  orderIdText: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  statusBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  divider: {
-    height: 1,
-    marginVertical: 12,
-  },
-  orderHeaderBottom: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  metaItem: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  metaLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  metaValue: {
-    fontSize: 12,
-    fontWeight: "600",
-    marginLeft: 2,
-  },
-  section: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 12,
-  },
-  customerInfoBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  customerAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  customerAvatarText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  customerName: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 2,
-  },
-  customerPhone: {
-    fontSize: 12,
-  },
-  contactButtonsRow: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  contactButton: {
-    flex: 1,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  contactButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-    fontSize: 12,
-  },
-  detailRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginBottom: 12,
-  },
-  detailLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  detailValue: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  notesText: {
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  actionButton: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 14,
-    borderRadius: 10,
-    marginBottom: 16,
-    gap: 8,
-  },
-  actionButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  completedMessage: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginBottom: 16,
-    gap: 12,
-  },
-  completedMessageText: {
-    fontWeight: "600",
-    fontSize: 13,
-  },
-  confirmOverlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 16,
-  },
-  confirmCard: {
-    borderRadius: 12,
-    padding: 20,
-    width: "100%",
-    maxWidth: 320,
-  },
-  confirmTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 8,
-  },
-  confirmMessage: {
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  confirmButtonsRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  confirmButtonNo: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  confirmButtonNoText: {
-    fontWeight: "600",
-    fontSize: 13,
-  },
-  confirmButtonYes: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  confirmButtonYesText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-    fontSize: 13,
-  },
-  successMessage: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginHorizontal: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-    gap: 10,
-  },
-  successMessageText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-    fontSize: 12,
-  },
-  errorText: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginVertical: 12,
-  },
-  errorButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    marginTop: 12,
-  },
-  errorButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-  },
+  safeArea: { flex: 1 },
+  centerFill: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 32 },
+  errorText: { fontSize: 13.5, textAlign: "center" },
+  backLinkButton: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
+  backLinkButtonText: { color: "#FFFFFF", fontSize: 13.5, fontWeight: "700" },
+
+  headerRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  iconButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  headerTitle: { fontSize: 16, fontWeight: "800" },
+  headerSubtitle: { fontSize: 12, marginTop: 2 },
+
+  scrollContent: { padding: 16, gap: 16 },
+  errorBanner: { borderRadius: 12, padding: 12 },
+  errorBannerText: { fontSize: 12.5, fontWeight: "700" },
+
+  mapWrap: { height: 200, borderRadius: 18, borderWidth: 1, overflow: "hidden", position: "relative" },
+  navigateButton: { position: "absolute", top: 12, right: 12, width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+
+  sectionCard: { borderWidth: 1, borderRadius: 18, padding: 16 },
+  sectionTitle: { fontSize: 14.5, fontWeight: "800", marginBottom: 12 },
+
+  customerRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  avatarText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
+  customerName: { fontSize: 14.5, fontWeight: "700" },
+  customerAddress: { fontSize: 12, marginTop: 2 },
+
+  contactButtonsRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  contactButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 42, borderRadius: 10 },
+  contactButtonText: { color: "#FFFFFF", fontSize: 12.5, fontWeight: "700" },
+  contactButtonGhost: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 42, borderRadius: 10, borderWidth: 1 },
+  contactButtonGhostText: { fontSize: 12.5, fontWeight: "700" },
+
+  detailRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 7 },
+  detailLabel: { fontSize: 12.5, fontWeight: "600" },
+  detailValue: { fontSize: 12.5, fontWeight: "700", flexShrink: 1, textAlign: "right" },
+
+  productRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
+  productName: { fontSize: 13.5, fontWeight: "700" },
+  productMeta: { fontSize: 11.5, marginTop: 2 },
+  productSubtotal: { fontSize: 13.5, fontWeight: "800" },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, paddingTop: 12, marginTop: 4 },
+  totalLabel: { fontSize: 12.5, fontWeight: "700" },
+  totalValue: { fontSize: 15, fontWeight: "800" },
+
+  actionsRow: { flexDirection: "row", gap: 10 },
+  actionButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 48, borderRadius: 12 },
+  actionButtonText: { color: "#FFFFFF", fontSize: 13.5, fontWeight: "700" },
+
+  confirmOverlay: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", paddingHorizontal: 32, zIndex: 50 },
+  confirmCard: { width: "100%", maxWidth: 340, borderRadius: 22, padding: 24 },
+  confirmTitle: { fontSize: 17, fontWeight: "800", marginBottom: 8 },
+  confirmMessage: { fontSize: 13.5, lineHeight: 19, marginBottom: 22 },
+  confirmButtonsRow: { flexDirection: "row", gap: 10 },
+  confirmButtonNo: { flex: 1, height: 46, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  confirmButtonNoText: { fontSize: 14, fontWeight: "700" },
+  confirmButtonYes: { flex: 1, height: 46, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  confirmButtonYesText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+
+  successOverlay: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(15,23,42,0.45)", alignItems: "center", justifyContent: "center", zIndex: 60 },
+  successCard: { width: "78%", maxWidth: 320, borderRadius: 24, paddingVertical: 36, paddingHorizontal: 32, alignItems: "center" },
+  successCircle: { width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center", marginBottom: 18 },
+  successMessage: { fontSize: 16, fontWeight: "800", textAlign: "center" },
 });

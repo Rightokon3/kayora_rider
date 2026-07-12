@@ -15,7 +15,6 @@ import {
   Image,
 } from "react-native";
 import { useRouter } from "expo-router";
-import * as SecureStore from "expo-secure-store";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -46,51 +45,18 @@ const COLORS = {
 };
 
 /* ============================================================
-   DEMO AUTH UTILITY
-   Simulated authentication until backend is available.
+   REAL AUTH — talks to Laravel via services/driverAuth.ts
 ============================================================ */
-const DEMO_DRIVER = {
-  id: "DRV0001",
-  email: "driver@kayora.com",
-  password: "driver123",
-  name: "John Sunday",
-};
-
-const REMEMBER_ME_KEY = "kayora_driver_remember_me";
-const SESSION_KEY = "kayora_driver_session";
-
-type DemoAuthResult =
-  | { success: true; driverName: string }
-  | { success: false };
-
-const DemoAuth = {
-  async login(identifier: string, password: string): Promise<DemoAuthResult> {
-    // Simulate network latency
-    await new Promise((resolve) => setTimeout(resolve, 900));
-
-    const normalized = identifier.trim().toLowerCase();
-    const isIdMatch = normalized === DEMO_DRIVER.id.toLowerCase();
-    const isEmailMatch = normalized === DEMO_DRIVER.email.toLowerCase();
-
-    if ((isIdMatch || isEmailMatch) && password === DEMO_DRIVER.password) {
-      return { success: true, driverName: DEMO_DRIVER.name };
-    }
-    return { success: false };
-  },
-
-  async persistSession(remember: boolean) {
-    if (remember) {
-      await SecureStore.setItemAsync(REMEMBER_ME_KEY, "true");
-      await SecureStore.setItemAsync(SESSION_KEY, DEMO_DRIVER.id);
-    }
-  },
-};
+import { DriverAuth } from "../../services/driverAuth";
+import { useDriverAuth } from "../../context/DriverAuthContext";
+import { hasValidSession } from "../../services/api";
 
 /* ============================================================
    MAIN COMPONENT
 ============================================================ */
 export default function DriverLoginScreen() {
   const router = useRouter();
+  const { signIn } = useDriverAuth();
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -99,6 +65,7 @@ export default function DriverLoginScreen() {
 
   const [loading, setLoading] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("Incorrect Driver ID or Password");
   const [showSuccess, setShowSuccess] = useState(false);
   const [driverName, setDriverName] = useState("");
   const [forgotVisible, setForgotVisible] = useState(false);
@@ -176,9 +143,8 @@ export default function DriverLoginScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const remembered = await SecureStore.getItemAsync(REMEMBER_ME_KEY);
-        const session = await SecureStore.getItemAsync(SESSION_KEY);
-        if (remembered === "true" && session) {
+        const valid = await hasValidSession();
+        if (valid) {
           router.replace("/driver/dashboard");
         }
       } catch (e) {
@@ -202,17 +168,26 @@ export default function DriverLoginScreen() {
 
     if (!identifier.trim() || !password.trim()) {
       triggerShake();
+      setErrorMessage("Please enter your Driver ID/Email and password.");
       setShowError(true);
       resetErrorAfterDelay();
       return;
     }
 
     setLoading(true);
-    const result = await DemoAuth.login(identifier, password);
+    const result = await DriverAuth.login(identifier, password);
     setLoading(false);
 
     if (result.success) {
-      await DemoAuth.persistSession(rememberMe);
+      // Every successful login now persists a real 30-day session token —
+      // there's no separate "remember me only" branch, since the token
+      // itself carries its own 30-day expiry enforced by the backend.
+      //
+      // Calling signIn() here (not just saving the token in driverAuth.ts)
+      // is what actually fixes the redirect loop: it updates the SAME
+      // context instance the route guard reads from, synchronously, so
+      // there's no stale "guest" status left over by the time we navigate.
+      signIn();
       setDriverName(result.driverName);
       showSuccessAnimation();
       setTimeout(() => {
@@ -220,10 +195,14 @@ export default function DriverLoginScreen() {
       }, 1000);
     } else {
       triggerShake();
+      // Surface the REAL reason (wrong credentials, network error, wrong
+      // API URL, server error, etc.) instead of a hardcoded string, so
+      // failures are actually diagnosable instead of all looking identical.
+      setErrorMessage(result.message ?? "Incorrect Driver ID or Password");
       setShowError(true);
       resetErrorAfterDelay();
     }
-  }, [identifier, password, rememberMe, loading]);
+  }, [identifier, password, loading]);
 
   const handleCallAdmin = () => {
     Linking.openURL("tel:+2348000000000");
@@ -299,7 +278,7 @@ export default function DriverLoginScreen() {
               {showError && (
                 <Animated.View style={styles.errorBanner}>
                   <Ionicons name="alert-circle" size={16} color={COLORS.error} />
-                  <Text style={styles.errorText}>Incorrect Driver ID or Password</Text>
+                  <Text style={styles.errorText}>{errorMessage}</Text>
                 </Animated.View>
               )}
 
@@ -578,7 +557,7 @@ const styles = StyleSheet.create({
 
   /* Success Overlay */
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.45)",
     alignItems: "center",
     justifyContent: "center",

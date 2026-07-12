@@ -23,6 +23,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { useDriverAuth } from "../../context/DriverAuthContext";
 import * as SecureStore from "expo-secure-store";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -85,8 +86,6 @@ function getPalette(scheme: Scheme) {
 }
 
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
-const REMEMBER_ME_KEY = "kayora_driver_remember_me";
-const SESSION_KEY = "kayora_driver_session";
 
 /* ============================================================
    TOP / BOTTOM NAV CONFIG
@@ -632,6 +631,7 @@ function BottomNav({
 ============================================================ */
 export default function DriverAccountScreen() {
   const router = useRouter();
+  const { signOut } = useDriverAuth();
   const { width } = useWindowDimensions();
   const isWideScreen = width >= 720;
 
@@ -686,14 +686,15 @@ export default function DriverAccountScreen() {
 
   const handleSignOut = useCallback(async () => {
     setSignOutVisible(false);
-    try {
-      await SecureStore.deleteItemAsync(REMEMBER_ME_KEY);
-      await SecureStore.deleteItemAsync(SESSION_KEY);
-    } catch (e) {
-      // ignore
-    }
+    // Goes through the shared DriverAuthContext (not raw SecureStore calls
+    // for the old demo keys) so it clears the REAL token/expiry AND updates
+    // the same status the route guard reads from — otherwise the guard
+    // would still think "authed" after this, exactly the stale-status bug
+    // that caused the login redirect loop, just triggered from the other
+    // direction.
+    await signOut();
     router.replace("/driver/login" as any);
-  }, [router]);
+  }, [router, signOut]);
 
   /* Entrance animation */
   const entranceOpacity = useSharedValue(0);
@@ -1290,7 +1291,7 @@ const styles = StyleSheet.create({
 
   /* Confirm Dialog */
   confirmOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.5)",
     alignItems: "center",
     justifyContent: "center",

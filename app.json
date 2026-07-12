@@ -17,7 +17,8 @@
         "backgroundImage": "./assets/images/kayora-logo.png",
         "monochromeImage": "./assets/images/kayora-logo.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.kayoraDriver"
     },
     "web": {
       "output": "static",
@@ -35,7 +36,8 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "@maplibre/maplibre-react-native"
     ],
     "experiments": {
       "typedRoutes": true,

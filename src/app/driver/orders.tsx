@@ -13,20 +13,19 @@ import {
   StyleSheet,
   ScrollView,
   FlatList,
-  Image,
   Linking,
   Appearance,
   ActivityIndicator,
   Platform,
   Modal,
+  RefreshControl,
   useWindowDimensions,
   KeyboardAvoidingView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { WebView } from "react-native-webview";
-import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
+import TrackingMap from "../../components/TrackingMap";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
@@ -34,14 +33,14 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSpring,
-  withSequence,
-  withRepeat,
   Easing,
   FadeInDown,
   FadeIn,
   FadeOut,
   ZoomIn,
 } from "react-native-reanimated";
+import { DriverOrdersService } from "../../services/driverOrders";
+import { DriverOrder } from "../../types/driverOrder";
 
 /* ============================================================
    BRAND COLORS
@@ -111,18 +110,24 @@ const BOTTOM_TABS = [
 ];
 
 /* ============================================================
-   DEMO DATA
+   DISPLAY MODEL
+   ------------------------------------------------------------
+   The card UI collapses the backend's 8-value order status into
+   a simpler 3-bucket Pending/Active/Completed + subStatus, same
+   pattern as the dashboard's task mapping. mapOrderToDisplay is
+   the ONLY place that needs to know how one becomes the other.
+   isAsapOffer is the ONLY condition that shows Accept/Decline —
+   an ASAP order the driver has already accepted just looks like
+   a normal Active order from here on.
 ============================================================ */
-type OrderStatus = "Pending" | "Active" | "Completed";
-type OrderSubStatus = "Assigned" | "In Progress" | "Completed";
-type OrderPriority = "Normal" | "ASAP";
-type PaymentMethod = "Cash" | "Card" | "Transfer";
+type DisplayStatus = "Pending" | "Active" | "Completed";
+type DisplaySubStatus = "Assigned" | "In Progress" | "Completed";
 
-interface DemoOrder {
+interface DisplayOrder {
   id: string;
+  apiId: number;
   customerName: string;
   customerPhone: string;
-  customerPicture: string | null;
   address: string;
   lat: number;
   lng: number;
@@ -130,10 +135,11 @@ interface DemoOrder {
   bottleSize: string;
   quantity: string;
   price: number;
-  paymentMethod: PaymentMethod;
-  priority: OrderPriority;
-  status: OrderStatus;
-  subStatus: OrderSubStatus;
+  paymentMethod: string;
+  isAsap: boolean;
+  isAsapOffer: boolean;
+  status: DisplayStatus;
+  subStatus: DisplaySubStatus;
   distanceKm: number;
   eta: string;
   createdAt: string;
@@ -143,198 +149,86 @@ interface DemoOrder {
   notes?: string;
 }
 
-const INITIAL_ORDERS: DemoOrder[] = [
-  {
-    id: "ORD-3391",
-    customerName: "Chidinma Eze",
-    customerPhone: "+2348023456789",
-    customerPicture: null,
-    address: "12 Sapele Road, Benin City",
-    lat: 6.339,
-    lng: 5.6216,
-    bottleName: "30cl Sharp-Sharp",
-    bottleSize: "30cl",
-    quantity: "20 Packs",
-    price: 24500,
-    paymentMethod: "Cash",
-    priority: "ASAP",
-    status: "Pending",
-    subStatus: "Assigned",
-    distanceKm: 5.4,
-    eta: "12:30 PM",
-    createdAt: "11:52 AM",
-    notes: "Leave at the gate if no answer.",
-  },
-  {
-    id: "ORD-3392",
-    customerName: "Tunde Bakare",
-    customerPhone: "+2348034567890",
-    customerPicture: null,
-    address: "45 Airport Road, Benin City",
-    lat: 6.3423,
-    lng: 5.6109,
-    bottleName: "50cl Kayora Table Water",
-    bottleSize: "50cl",
-    quantity: "12 Packs",
-    price: 15800,
-    paymentMethod: "Transfer",
-    priority: "Normal",
-    status: "Pending",
-    subStatus: "Assigned",
-    distanceKm: 3.1,
-    eta: "1:05 PM",
-    createdAt: "11:40 AM",
-  },
-  {
-    id: "ORD-3387",
-    customerName: "Grace Idahosa",
-    customerPhone: "+2348045678901",
-    customerPicture: null,
-    address: "7 Ring Road, Benin City",
-    lat: 6.3355,
-    lng: 5.6037,
-    bottleName: "75cl Sharp-Sharp",
-    bottleSize: "75cl",
-    quantity: "8 Packs",
-    price: 12300,
-    paymentMethod: "Card",
-    priority: "Normal",
-    status: "Active",
-    subStatus: "Assigned",
-    distanceKm: 1.8,
-    eta: "1:40 PM",
-    createdAt: "10:55 AM",
-    assignedAt: "11:02 AM",
-  },
-  {
-    id: "ORD-3379",
-    customerName: "Michael Osaro",
-    customerPhone: "+2348056789012",
-    customerPicture: null,
-    address: "18 New Lagos Road, Benin City",
-    lat: 6.3288,
-    lng: 5.6142,
-    bottleName: "30cl Sharp-Sharp",
-    bottleSize: "30cl",
-    quantity: "30 Packs",
-    price: 36000,
-    paymentMethod: "Cash",
-    priority: "Normal",
-    status: "Active",
-    subStatus: "In Progress",
-    distanceKm: 2.6,
-    eta: "1:15 PM",
-    createdAt: "10:10 AM",
-    assignedAt: "10:20 AM",
-    startedAt: "10:35 AM",
-  },
-  {
-    id: "ORD-3350",
-    customerName: "Ifeoma Chukwu",
-    customerPhone: "+2348067890123",
-    customerPicture: null,
-    address: "3 Reservation Road, Benin City",
-    lat: 6.3401,
-    lng: 5.6288,
-    bottleName: "50cl Kayora Table Water",
-    bottleSize: "50cl",
-    quantity: "15 Packs",
-    price: 19750,
-    paymentMethod: "Transfer",
-    priority: "Normal",
-    status: "Completed",
-    subStatus: "Completed",
-    distanceKm: 4.2,
-    eta: "9:50 AM",
-    createdAt: "8:45 AM",
-    assignedAt: "8:52 AM",
-    startedAt: "9:05 AM",
-    completedAt: "9:48 AM",
-  },
-];
+function formatTimeLabel(iso: string | null): string | undefined {
+  if (!iso) return undefined;
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function mapOrderToDisplay(order: DriverOrder): DisplayOrder {
+  const firstItem = order.items[0];
+  const bottleSummary =
+    order.items.length > 1
+      ? `${firstItem?.bottleName ?? "Order"} +${order.items.length - 1} more`
+      : firstItem?.bottleName ?? "—";
+  const totalQuantity = order.items.reduce((sum, item) => sum + item.quantity, 0);
+
+  let status: DisplayStatus;
+  let subStatus: DisplaySubStatus;
+
+  switch (order.status) {
+    case "Pending":
+      status = "Pending";
+      subStatus = "Assigned";
+      break;
+    case "Out For Delivery":
+      status = "Active";
+      subStatus = "In Progress";
+      break;
+    case "Delivered":
+      status = "Completed";
+      subStatus = "Completed";
+      break;
+    case "Accepted":
+    case "Assigned":
+    case "Preparing":
+    default:
+      status = "Active";
+      subStatus = "Assigned";
+      break;
+  }
+
+  const isAsap = order.priority === "Urgent";
+
+  return {
+    id: order.orderNumber,
+    apiId: order.id,
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    address: order.deliveryAddress,
+    lat: order.latitude,
+    lng: order.longitude,
+    bottleName: bottleSummary,
+    bottleSize: firstItem?.size ?? "",
+    quantity: `${totalQuantity} Pack${totalQuantity === 1 ? "" : "s"}`,
+    price: order.amount,
+    paymentMethod: order.paymentMethod ?? "—",
+    isAsap,
+    status,
+    subStatus,
+    // The ONLY thing that gates Accept/Decline: an ASAP order that's still
+    // Pending AND hasn't been claimed by anyone yet (offeredToMe, from the
+    // service mapper). A regular order sitting at Pending would NOT show
+    // these buttons, matching "only ASAP delivery comes with that option."
+    isAsapOffer: isAsap && order.offeredToMe,
+    distanceKm: order.distanceKm ?? 0,
+    eta: order.eta ?? "—",
+    createdAt: formatTimeLabel(order.createdAt) ?? "—",
+    assignedAt: formatTimeLabel(order.assignedAt),
+    startedAt: formatTimeLabel(order.startedAt),
+    completedAt: formatTimeLabel(order.completedAt),
+    notes: order.specialInstructions ?? undefined,
+  };
+}
 
 /* ============================================================
    FILTER TABS
 ============================================================ */
-const FILTERS: { key: OrderStatus; label: string }[] = [
+const FILTERS: { key: DisplayStatus; label: string }[] = [
   { key: "Pending", label: "Pending" },
   { key: "Active", label: "Active" },
   { key: "Completed", label: "Completed" },
 ];
 
-/* ============================================================
-   LEAFLET HTML BUILDERS
-============================================================ */
-function buildTrackingHtml(
-  driverLat: number,
-  driverLng: number,
-  destLat: number,
-  destLng: number,
-  isDark: boolean
-) {
-  const tileUrl = isDark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    html, body, #map { height: 100%; margin: 0; padding: 0; background: ${isDark ? "#102E56" : "#F8FAFC"}; }
-    .leaflet-control-attribution { font-size: 9px; }
-    .driver-marker { width: 18px; height: 18px; border-radius: 9px; background: #0D4A8C; border: 3px solid #FFFFFF; box-shadow: 0 0 0 4px rgba(13,74,140,0.25); }
-    .dest-marker { width: 18px; height: 18px; border-radius: 9px; background: #D4A64A; border: 3px solid #FFFFFF; box-shadow: 0 0 0 4px rgba(212,166,74,0.25); }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    var driverLatLng = [${driverLat}, ${driverLng}];
-    var destLatLng = [${destLat}, ${destLng}];
-    var map = L.map('map', { zoomControl: false }).fitBounds([driverLatLng, destLatLng], { padding: [60, 60] });
-
-    L.tileLayer('${tileUrl}', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
-
-    var driverIcon = L.divIcon({ className: 'driver-marker', iconSize: [18, 18] });
-    var destIcon = L.divIcon({ className: 'dest-marker', iconSize: [18, 18] });
-
-    var driverMarker = L.marker(driverLatLng, { icon: driverIcon }).addTo(map);
-    L.marker(destLatLng, { icon: destIcon }).addTo(map);
-
-    var routeLine = L.polyline([driverLatLng, destLatLng], {
-      color: '#1E5FAF', weight: 4, opacity: 0.85, dashArray: '1, 10'
-    }).addTo(map);
-
-    function updateDriver(lat, lng) {
-      var newLatLng = new L.LatLng(lat, lng);
-      driverMarker.setLatLng(newLatLng);
-      routeLine.setLatLngs([newLatLng, destLatLng]);
-      map.panTo(newLatLng, { animate: true, duration: 1 });
-    }
-
-    true;
-  </script>
-</body>
-</html>`;
-}
-
-/* ============================================================
-   HELPERS
-============================================================ */
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 function formatNaira(amount: number) {
   return `₦${amount.toLocaleString("en-NG")}`;
@@ -358,7 +252,6 @@ function DashboardHeader({
 }) {
   const themeIcon =
     themeMode === "light" ? "sunny-outline" : themeMode === "dark" ? "moon-outline" : "contrast-outline";
-  const initial = "J";
 
   return (
     <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
@@ -383,7 +276,7 @@ function DashboardHeader({
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
           <View style={[styles.avatarFallback, { backgroundColor: palette.secondary }]}>
-            <Text style={styles.avatarFallbackText}>{initial}</Text>
+            <Text style={styles.avatarFallbackText}>D</Text>
           </View>
         </Pressable>
       </View>
@@ -463,9 +356,9 @@ function FilterPills({
   counts,
 }: {
   palette: ReturnType<typeof getPalette>;
-  active: OrderStatus;
-  onChange: (key: OrderStatus) => void;
-  counts: Record<OrderStatus, number>;
+  active: DisplayStatus;
+  onChange: (key: DisplayStatus) => void;
+  counts: Record<DisplayStatus, number>;
 }) {
   return (
     <View style={[styles.filterWrap, { backgroundColor: palette.pillBg }]}>
@@ -512,14 +405,14 @@ const OrderCard = memo(function OrderCard({
   onStart,
   onComplete,
 }: {
-  order: DemoOrder;
+  order: DisplayOrder;
   palette: ReturnType<typeof getPalette>;
-  onAccept: (order: DemoOrder) => void;
-  onDecline: (order: DemoOrder) => void;
-  onTrack: (order: DemoOrder) => void;
-  onViewDetails: (order: DemoOrder) => void;
-  onStart: (order: DemoOrder) => void;
-  onComplete: (order: DemoOrder) => void;
+  onAccept: (order: DisplayOrder) => void;
+  onDecline: (order: DisplayOrder) => void;
+  onTrack: (order: DisplayOrder) => void;
+  onViewDetails: (order: DisplayOrder) => void;
+  onStart: (order: DisplayOrder) => void;
+  onComplete: (order: DisplayOrder) => void;
 }) {
   const scale = useSharedValue(1);
   const cardStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -539,7 +432,7 @@ const OrderCard = memo(function OrderCard({
       entering={FadeInDown.duration(400)}
       style={[styles.orderCard, { backgroundColor: palette.card, borderColor: palette.border }, cardStyle]}
     >
-      {order.priority === "ASAP" && order.status === "Pending" && (
+      {order.isAsap && (
         <View style={[styles.asapBadge, { backgroundColor: palette.danger }]}>
           <Ionicons name="flash" size={12} color="#FFFFFF" />
           <Text style={styles.asapBadgeText}>ASAP DELIVERY</Text>
@@ -554,13 +447,9 @@ const OrderCard = memo(function OrderCard({
       </View>
 
       <View style={styles.orderCustomerRow}>
-        {order.customerPicture ? (
-          <Image source={{ uri: order.customerPicture }} style={styles.orderAvatarImage} />
-        ) : (
-          <View style={[styles.orderAvatarFallback, { backgroundColor: palette.primary }]}>
-            <Text style={styles.orderAvatarFallbackText}>{initial}</Text>
-          </View>
-        )}
+        <View style={[styles.orderAvatarFallback, { backgroundColor: palette.primary }]}>
+          <Text style={styles.orderAvatarFallbackText}>{initial}</Text>
+        </View>
         <View style={{ marginLeft: 10, flex: 1 }}>
           <Text style={[styles.orderCustomerName, { color: palette.text }]} numberOfLines={1}>
             {order.customerName}
@@ -569,7 +458,7 @@ const OrderCard = memo(function OrderCard({
             {order.address}
           </Text>
         </View>
-        {order.priority === "Normal" && (
+        {!order.isAsap && (
           <View style={[styles.priorityBadgeSoft, { backgroundColor: palette.pillBg }]}>
             <Text style={[styles.priorityBadgeSoftText, { color: palette.muted }]}>Normal</Text>
           </View>
@@ -608,8 +497,9 @@ const OrderCard = memo(function OrderCard({
         </View>
       </View>
 
-      {/* Action Rows */}
-      {order.status === "Pending" && (
+      {/* Accept / Decline — ONLY for an ASAP order still awaiting response.
+          A regular Pending order never reaches this branch. */}
+      {order.isAsapOffer && (
         <>
           <View style={styles.taskButtonsRow}>
             <Pressable
@@ -628,10 +518,6 @@ const OrderCard = memo(function OrderCard({
             </Pressable>
           </View>
           <View style={styles.taskButtonsRow}>
-            <Pressable onPress={() => onTrack(order)} style={[styles.ghostButton, { borderColor: palette.border }]}>
-              <Ionicons name="map-outline" size={15} color={palette.text} />
-              <Text style={[styles.ghostButtonText, { color: palette.text }]}>Track Delivery</Text>
-            </Pressable>
             <Pressable onPress={() => onViewDetails(order)} style={[styles.ghostButton, { borderColor: palette.border }]}>
               <Ionicons name="document-text-outline" size={15} color={palette.text} />
               <Text style={[styles.ghostButtonText, { color: palette.text }]}>View Details</Text>
@@ -688,8 +574,8 @@ const OrderCard = memo(function OrderCard({
 /* ============================================================
    EMPTY STATE
 ============================================================ */
-function EmptyState({ palette, filter }: { palette: ReturnType<typeof getPalette>; filter: OrderStatus }) {
-  const copy: Record<OrderStatus, { title: string; icon: keyof typeof Ionicons.glyphMap }> = {
+function EmptyState({ palette, filter }: { palette: ReturnType<typeof getPalette>; filter: DisplayStatus }) {
+  const copy: Record<DisplayStatus, { title: string; icon: keyof typeof Ionicons.glyphMap }> = {
     Pending: { title: "No Pending Orders", icon: "time-outline" },
     Active: { title: "No Active Deliveries", icon: "navigate-circle-outline" },
     Completed: { title: "No Completed Deliveries", icon: "checkmark-done-circle-outline" },
@@ -717,6 +603,7 @@ function ConfirmDialog({
   palette,
   title,
   message,
+  loading,
   onYes,
   onNo,
 }: {
@@ -724,6 +611,7 @@ function ConfirmDialog({
   palette: ReturnType<typeof getPalette>;
   title: string;
   message: string;
+  loading: boolean;
   onYes: () => void;
   onNo: () => void;
 }) {
@@ -734,11 +622,11 @@ function ConfirmDialog({
         <Text style={[styles.confirmTitle, { color: palette.text }]}>{title}</Text>
         <Text style={[styles.confirmMessage, { color: palette.muted }]}>{message}</Text>
         <View style={styles.confirmButtonsRow}>
-          <Pressable onPress={onNo} style={[styles.confirmButtonNo, { borderColor: palette.border }]}>
+          <Pressable onPress={onNo} disabled={loading} style={[styles.confirmButtonNo, { borderColor: palette.border }]}>
             <Text style={[styles.confirmButtonNoText, { color: palette.text }]}>No</Text>
           </Pressable>
-          <Pressable onPress={onYes} style={[styles.confirmButtonYes, { backgroundColor: palette.primary }]}>
-            <Text style={styles.confirmButtonYesText}>Yes</Text>
+          <Pressable onPress={onYes} disabled={loading} style={[styles.confirmButtonYes, { backgroundColor: palette.primary }]}>
+            {loading ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.confirmButtonYesText}>Yes</Text>}
           </Pressable>
         </View>
       </Animated.View>
@@ -788,61 +676,59 @@ function Toast({ message, palette }: { message: string | null; palette: ReturnTy
 
 /* ============================================================
    TRACK DELIVERY MODAL
+   ------------------------------------------------------------
+   Polls GET /driver/orders/{id}/track every few seconds. That
+   endpoint reads the driver's current_latitude/longitude, which
+   the dashboard's separate location-ping loop is already writing
+   in real time — so the marker here reflects genuine GPS
+   movement, not a client-side simulation.
 ============================================================ */
 function TrackDeliveryModal({
   order,
   palette,
   onClose,
 }: {
-  order: DemoOrder | null;
+  order: DisplayOrder | null;
   palette: ReturnType<typeof getPalette>;
   onClose: () => void;
 }) {
-  const webviewRef = useRef<WebView>(null);
   const [driverCoords, setDriverCoords] = useState(FALLBACK_LOCATION);
   const [mapReady, setMapReady] = useState(false);
-  const [distanceKm, setDistanceKm] = useState(order?.distanceKm ?? 0);
+  const [distanceKm, setDistanceKm] = useState<number | null>(order?.distanceKm ?? null);
 
   useEffect(() => {
     if (!order) return;
-    let isMounted = true;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          const position = await Location.getCurrentPositionAsync({});
-          if (isMounted) {
-            setDriverCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
-          }
-        }
-      } catch (e) {
-        // fall back silently
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, [order?.id]);
+    setDriverCoords(FALLBACK_LOCATION);
+    setDistanceKm(order.distanceKm);
+  }, [order?.apiId]);
 
   useEffect(() => {
-    if (!order || !mapReady) return;
-    const interval = setInterval(() => {
-      setDriverCoords((prev) => {
-        const next = {
-          lat: prev.lat + (order.lat - prev.lat) * 0.06 + (Math.random() - 0.5) * 0.0004,
-          lng: prev.lng + (order.lng - prev.lng) * 0.06 + (Math.random() - 0.5) * 0.0004,
-        };
-        webviewRef.current?.injectJavaScript(`updateDriver(${next.lat}, ${next.lng}); true;`);
-        setDistanceKm(Number(haversineKm(next.lat, next.lng, order.lat, order.lng).toFixed(1)));
-        return next;
-      });
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [order?.id, mapReady]);
+    if (!order) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const update = await DriverOrdersService.trackOrder(order.apiId);
+        if (cancelled) return;
+        if (update.driverLatitude != null && update.driverLongitude != null) {
+          setDriverCoords({ lat: update.driverLatitude, lng: update.driverLongitude });
+        }
+        if (update.distanceKm != null) setDistanceKm(update.distanceKm);
+      } catch (e) {
+        // Skip this tick silently — a transient network error shouldn't
+        // interrupt the polling interval.
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [order?.apiId]);
 
   if (!order) return null;
-
-  const html = buildTrackingHtml(driverCoords.lat, driverCoords.lng, order.lat, order.lng, palette.scheme === "dark");
 
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
@@ -858,14 +744,13 @@ function TrackDeliveryModal({
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
               <View style={[styles.trackMapWrap, { borderColor: palette.border }]}>
-                <WebView
-                  ref={webviewRef}
-                  originWhitelist={["*"]}
-                  source={{ html }}
-                  style={{ flex: 1 }}
-                  onLoadEnd={() => setMapReady(true)}
-                  javaScriptEnabled
-                  domStorageEnabled
+                <TrackingMap
+                  driverLat={driverCoords.lat}
+                  driverLng={driverCoords.lng}
+                  destLat={order.lat}
+                  destLng={order.lng}
+                  isDark={palette.scheme === "dark"}
+                  onReady={() => setMapReady(true)}
                 />
                 {!mapReady && (
                   <View style={[styles.mapLoadingOverlay, { backgroundColor: palette.card }]}>
@@ -877,7 +762,9 @@ function TrackDeliveryModal({
               <View style={styles.trackStatsRow}>
                 <View style={[styles.trackStatPill, { backgroundColor: palette.pillBg }]}>
                   <Ionicons name="navigate-outline" size={14} color={palette.text} />
-                  <Text style={[styles.trackStatText, { color: palette.text }]}>{distanceKm} km away</Text>
+                  <Text style={[styles.trackStatText, { color: palette.text }]}>
+                    {distanceKm != null ? `${distanceKm} km away` : "Distance unavailable"}
+                  </Text>
                 </View>
                 <View style={[styles.trackStatPill, { backgroundColor: palette.pillBg }]}>
                   <Ionicons name="time-outline" size={14} color={palette.text} />
@@ -923,7 +810,7 @@ function TrackDeliveryModal({
                 <DetailRow label="Quantity" value={order.quantity} palette={palette} />
                 <DetailRow label="Price" value={formatNaira(order.price)} palette={palette} />
                 <DetailRow label="Payment" value={order.paymentMethod} palette={palette} />
-                <DetailRow label="Priority" value={order.priority} palette={palette} />
+                <DetailRow label="Priority" value={order.isAsap ? "ASAP" : "Normal"} palette={palette} />
                 {order.notes && <DetailRow label="Notes" value={order.notes} palette={palette} />}
               </View>
             </ScrollView>
@@ -951,7 +838,7 @@ function ViewDetailsModal({
   palette,
   onClose,
 }: {
-  order: DemoOrder | null;
+  order: DisplayOrder | null;
   palette: ReturnType<typeof getPalette>;
   onClose: () => void;
 }) {
@@ -984,7 +871,7 @@ function ViewDetailsModal({
                 <DetailRow label="Quantity" value={order.quantity} palette={palette} />
                 <DetailRow label="Price" value={formatNaira(order.price)} palette={palette} />
                 <DetailRow label="Payment" value={order.paymentMethod} palette={palette} />
-                <DetailRow label="Priority" value={order.priority} palette={palette} />
+                <DetailRow label="Priority" value={order.isAsap ? "ASAP" : "Normal"} palette={palette} />
                 {order.notes && <DetailRow label="Delivery Notes" value={order.notes} palette={palette} />}
               </View>
 
@@ -1104,31 +991,35 @@ export default function DriverOrdersScreen() {
     }
   }, [themeMode]);
 
-  /* Orders State */
-  const [orders, setOrders] = useState<DemoOrder[]>(INITIAL_ORDERS);
-  const [activeFilter, setActiveFilter] = useState<OrderStatus>("Pending");
+  /* Orders State — fetched from the backend, no demo data */
+  const [orders, setOrders] = useState<DisplayOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<DisplayStatus>("Pending");
 
-  const [trackingOrder, setTrackingOrder] = useState<DemoOrder | null>(null);
-  const [detailsOrder, setDetailsOrder] = useState<DemoOrder | null>(null);
+  const [trackingOrder, setTrackingOrder] = useState<DisplayOrder | null>(null);
+  const [detailsOrder, setDetailsOrder] = useState<DisplayOrder | null>(null);
 
-  const [confirmAction, setConfirmAction] = useState<{ type: "start" | "complete"; order: DemoOrder } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: "start" | "complete"; order: DisplayOrder } | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (message: string) => {
+  const showToast = useCallback((message: string) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToastMessage(message);
     toastTimeoutRef.current = setTimeout(() => setToastMessage(null), 3200);
-  };
+  }, []);
 
-  const showSuccess = (message: string) => {
+  const showSuccess = useCallback((message: string) => {
     if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
     setSuccessMessage(message);
     successTimeoutRef.current = setTimeout(() => setSuccessMessage(null), 1600);
-  };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1137,12 +1028,44 @@ export default function DriverOrdersScreen() {
     };
   }, []);
 
+  const loadOrders = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const result = await DriverOrdersService.getOrders();
+      setOrders(result.map(mapOrderToDisplay));
+    } catch (e) {
+      setLoadError("Could not load orders. Pull down to try again.");
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await loadOrders();
+      setLoading(false);
+    })();
+  }, [loadOrders]);
+
+  // ASAP offers can arrive at any moment (a nearby order just got dispatched
+  // to this driver) — poll periodically so a new offer shows up without the
+  // driver needing to manually refresh.
+  useEffect(() => {
+    const interval = setInterval(loadOrders, 20000);
+    return () => clearInterval(interval);
+  }, [loadOrders]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadOrders();
+    setRefreshing(false);
+  }, [loadOrders]);
+
   const filteredOrders = useMemo(
     () => orders.filter((o) => o.status === activeFilter),
     [orders, activeFilter]
   );
 
-  const counts = useMemo<Record<OrderStatus, number>>(
+  const counts = useMemo<Record<DisplayStatus, number>>(
     () => ({
       Pending: orders.filter((o) => o.status === "Pending").length,
       Active: orders.filter((o) => o.status === "Active").length,
@@ -1177,60 +1100,73 @@ export default function DriverOrdersScreen() {
     // Notification page will be built later.
   }, []);
 
-  const handleAccept = useCallback((order: DemoOrder) => {
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === order.id
-          ? { ...o, status: "Active", subStatus: "Assigned", assignedAt: currentTimeLabel() }
-          : o
-      )
-    );
-    showSuccess("Delivery Assigned Successfully");
-    setActiveFilter("Active");
-  }, []);
+  const handleAccept = useCallback(
+    async (order: DisplayOrder) => {
+      try {
+        await DriverOrdersService.acceptOrder(order.apiId);
+        showSuccess("Delivery Assigned Successfully");
+        setActiveFilter("Active");
+        await loadOrders();
+      } catch (e) {
+        showToast("Could not accept this order — it may have already been taken.");
+        await loadOrders();
+      }
+    },
+    [loadOrders, showSuccess, showToast]
+  );
 
-  const handleDecline = useCallback((order: DemoOrder) => {
-    setOrders((prev) => prev.filter((o) => o.id !== order.id));
-    showToast(`Order #${order.id} declined`);
-  }, []);
+  const handleDecline = useCallback(
+    async (order: DisplayOrder) => {
+      // Optimistic removal — the order is about to be re-offered to the
+      // next nearest driver, so it shouldn't sit in this driver's list
+      // waiting for the network round-trip.
+      setOrders((prev) => prev.filter((o) => o.apiId !== order.apiId));
+      try {
+        await DriverOrdersService.declineOrder(order.apiId);
+        showToast(`Order #${order.id} declined`);
+      } catch (e) {
+        showToast("Could not decline this order. Please try again.");
+        await loadOrders();
+      }
+    },
+    [loadOrders, showToast]
+  );
 
-  const handleTrack = useCallback((order: DemoOrder) => setTrackingOrder(order), []);
-  const handleViewDetails = useCallback((order: DemoOrder) => setDetailsOrder(order), []);
+  const handleTrack = useCallback((order: DisplayOrder) => setTrackingOrder(order), []);
+  const handleViewDetails = useCallback((order: DisplayOrder) => setDetailsOrder(order), []);
 
-  const handleStartRequest = useCallback((order: DemoOrder) => {
+  const handleStartRequest = useCallback((order: DisplayOrder) => {
     setConfirmAction({ type: "start", order });
   }, []);
 
-  const handleCompleteRequest = useCallback((order: DemoOrder) => {
+  const handleCompleteRequest = useCallback((order: DisplayOrder) => {
     setConfirmAction({ type: "complete", order });
   }, []);
 
-  const handleConfirmYes = useCallback(() => {
+  const handleConfirmYes = useCallback(async () => {
     if (!confirmAction) return;
     const { type, order } = confirmAction;
-    setConfirmAction(null);
+    setActionLoading(true);
 
-    if (type === "start") {
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === order.id ? { ...o, subStatus: "In Progress", startedAt: currentTimeLabel() } : o
-        )
-      );
-      showSuccess("Delivery Started");
-      setTimeout(() => showToast("Customer has been notified that delivery is on the way."), 900);
-    } else {
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === order.id
-            ? { ...o, status: "Completed", subStatus: "Completed", completedAt: currentTimeLabel() }
-            : o
-        )
-      );
-      showSuccess("Delivery Completed Successfully");
-      setTimeout(() => showToast("Customer has been notified that the order has been delivered."), 900);
-      setActiveFilter("Completed");
+    try {
+      if (type === "start") {
+        await DriverOrdersService.startOrder(order.apiId);
+        showSuccess("Delivery Started");
+        setTimeout(() => showToast("Customer has been notified that delivery is on the way."), 900);
+      } else {
+        await DriverOrdersService.completeOrder(order.apiId);
+        showSuccess("Delivery Completed Successfully");
+        setTimeout(() => showToast("Customer has been notified that the order has been delivered."), 900);
+        setActiveFilter("Completed");
+      }
+      await loadOrders();
+    } catch (e) {
+      showToast("Could not update this order. Please try again.");
+    } finally {
+      setActionLoading(false);
+      setConfirmAction(null);
     }
-  }, [confirmAction]);
+  }, [confirmAction, loadOrders, showSuccess, showToast]);
 
   const handleConfirmNo = useCallback(() => setConfirmAction(null), []);
 
@@ -1251,13 +1187,24 @@ export default function DriverOrdersScreen() {
           style={{ flex: 1, backgroundColor: palette.background }}
           contentContainerStyle={[styles.scrollContent, { paddingHorizontal: isWideScreen ? 32 : 16 }]}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={palette.primary} colors={[palette.primary]} />}
         >
           <Animated.View style={contentEntrance}>
             <Text style={[styles.pageTitle, { color: palette.text }]}>Orders</Text>
 
+            {loadError && (
+              <View style={[styles.errorBanner, { backgroundColor: palette.danger + "1A" }]}>
+                <Text style={[styles.errorBannerText, { color: palette.danger }]}>{loadError}</Text>
+              </View>
+            )}
+
             <FilterPills palette={palette} active={activeFilter} onChange={setActiveFilter} counts={counts} />
 
-            {filteredOrders.length === 0 ? (
+            {loading ? (
+              <View style={{ paddingVertical: 60, alignItems: "center" }}>
+                <ActivityIndicator color={palette.primary} />
+              </View>
+            ) : filteredOrders.length === 0 ? (
               <EmptyState palette={palette} filter={activeFilter} />
             ) : (
               <FlatList
@@ -1300,6 +1247,7 @@ export default function DriverOrdersScreen() {
             ? `Confirm you are starting delivery for Order #${confirmAction?.order.id}.`
             : `Confirm Order #${confirmAction?.order.id} has been delivered to the customer.`
         }
+        loading={actionLoading}
         onYes={handleConfirmYes}
         onNo={handleConfirmNo}
       />
@@ -1308,15 +1256,6 @@ export default function DriverOrdersScreen() {
       <Toast message={toastMessage} palette={palette} />
     </SafeAreaView>
   );
-}
-
-function currentTimeLabel() {
-  const now = new Date();
-  let hours = now.getHours();
-  const minutes = now.getMinutes().toString().padStart(2, "0");
-  const suffix = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  return `${hours}:${minutes} ${suffix}`;
 }
 
 /* ============================================================
@@ -1354,6 +1293,9 @@ const styles = StyleSheet.create({
 
   /* Page title */
   pageTitle: { fontSize: 26, fontWeight: "800", marginTop: 6, marginBottom: 16 },
+
+  errorBanner: { borderRadius: 12, padding: 14, marginBottom: 16 },
+  errorBannerText: { fontSize: 12.5, fontWeight: "700" },
 
   /* Filter Pills */
   filterWrap: {
@@ -1393,7 +1335,6 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 11.5, fontWeight: "800" },
 
   orderCustomerRow: { flexDirection: "row", alignItems: "center" },
-  orderAvatarImage: { width: 42, height: 42, borderRadius: 21 },
   orderAvatarFallback: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   orderAvatarFallbackText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
   orderCustomerName: { fontSize: 15, fontWeight: "700" },

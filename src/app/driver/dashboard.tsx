@@ -14,7 +14,6 @@ import {
   ScrollView,
   FlatList,
   Image,
-  Linking,
   Appearance,
   ActivityIndicator,
   Platform,
@@ -23,9 +22,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { WebView } from "react-native-webview";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
+import { DriverDashboardService } from "../../services/driverDashboard";
+import { DriverTask, DriverDailyStats } from "../../types/driverTask";
+import { LiveMapCard } from "../../components/LiveMapCard";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
   useSharedValue,
@@ -118,53 +119,47 @@ interface DemoTask {
   lng: number;
 }
 
-const DEMO_TASKS: DemoTask[] = [
-  {
-    id: "TASK-1001",
-    customerName: "Amaka Obi",
+/**
+ * TaskCard below was originally built against DemoTask's simplified 3-value
+ * status/priority. Rather than rewrite that whole card component, real
+ * DriverTask records from the backend are mapped into this same shape —
+ * so this function is the ONLY place that needs to know how the backend's
+ * 8-status / 3-priority order model collapses into the card's display model.
+ */
+function mapDriverTaskToDisplayTask(task: DriverTask): DemoTask {
+  const statusMap: Record<string, TaskStatus> = {
+    Assigned: "Assigned",
+    Preparing: "Assigned",
+    "Out For Delivery": "In Progress",
+    Delivered: "Completed",
+  };
+
+  const priorityMap: Record<string, TaskPriority> = {
+    Urgent: "High",
+    High: "High",
+    Normal: "Medium",
+  };
+
+  const firstItem = task.items[0];
+  const bottleSummary = task.items.length > 1 ? `${firstItem?.bottleName ?? "Order"} +${task.items.length - 1} more` : firstItem?.bottleName ?? "—";
+  const totalQuantity = task.items.reduce((sum, item) => sum + item.quantity, 0);
+
+  return {
+    id: String(task.id),
+    customerName: task.customerName,
     customerPicture: null,
-    phone: "+2348023456789",
-    address: "12 Sapele Road, Benin City",
-    bottleName: "30cl Sharp-Sharp",
-    quantity: "20 Packs",
-    status: "Assigned",
-    priority: "High",
-    distanceKm: 5.4,
-    eta: "12:30 PM",
-    lat: 6.339,
-    lng: 5.6216,
-  },
-  {
-    id: "TASK-1002",
-    customerName: "Emeka Nwosu",
-    customerPicture: null,
-    phone: "+2348034567890",
-    address: "45 Airport Road, Benin City",
-    bottleName: "50cl Kayora Table Water",
-    quantity: "12 Packs",
-    status: "Assigned",
-    priority: "Medium",
-    distanceKm: 3.1,
-    eta: "1:05 PM",
-    lat: 6.3423,
-    lng: 5.6109,
-  },
-  {
-    id: "TASK-1003",
-    customerName: "Grace Idahosa",
-    customerPicture: null,
-    phone: "+2348045678901",
-    address: "7 Ring Road, Benin City",
-    bottleName: "75cl Sharp-Sharp",
-    quantity: "8 Packs",
-    status: "In Progress",
-    priority: "Low",
-    distanceKm: 1.8,
-    eta: "1:40 PM",
-    lat: 6.3355,
-    lng: 5.6037,
-  },
-];
+    phone: task.customerPhone,
+    address: task.deliveryAddress,
+    bottleName: bottleSummary,
+    quantity: `${totalQuantity} Pack${totalQuantity === 1 ? "" : "s"}`,
+    status: statusMap[task.status] ?? "Assigned",
+    priority: priorityMap[task.priority] ?? "Medium",
+    distanceKm: task.distanceKm ?? 0,
+    eta: task.eta ?? "—",
+    lat: task.latitude,
+    lng: task.longitude,
+  };
+}
 
 /* ============================================================
    TOP NAV TABS
@@ -184,59 +179,6 @@ const BOTTOM_TABS = [
   { key: "tasks", label: "Tasks", icon: "list-outline", route: "/driver/tasks" as const },
   { key: "account", label: "Account", icon: "person-outline", route: "/driver/account" as const },
 ];
-
-/* ============================================================
-   FALLBACK LOCATION (Benin City) - used if GPS unavailable
-============================================================ */
-const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
-
-/* ============================================================
-   LEAFLET HTML BUILDER
-============================================================ */
-function buildLeafletHtml(lat: number, lng: number, isDark: boolean) {
-  const tileUrl = isDark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    html, body, #map { height: 100%; margin: 0; padding: 0; background: ${isDark ? "#102E56" : "#F8FAFC"}; }
-    .leaflet-control-attribution { font-size: 9px; }
-    .kayora-marker {
-      width: 20px; height: 20px; border-radius: 10px;
-      background: #0D4A8C; border: 3px solid #FFFFFF;
-      box-shadow: 0 0 0 4px rgba(13,74,140,0.25);
-    }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([${lat}, ${lng}], 15);
-    L.tileLayer('${tileUrl}', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-
-    var icon = L.divIcon({ className: 'kayora-marker', iconSize: [20, 20] });
-    var marker = L.marker([${lat}, ${lng}], { icon: icon }).addTo(map);
-
-    function updateMarker(lat, lng) {
-      var newLatLng = new L.LatLng(lat, lng);
-      marker.setLatLng(newLatLng);
-      map.panTo(newLatLng, { animate: true, duration: 1.2 });
-    }
-
-    true;
-  </script>
-</body>
-</html>`;
-}
 
 /* ============================================================
    HEADER
@@ -366,6 +308,18 @@ function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> })
     return hour >= 7 && hour < 17;
   });
 
+  // Push the computed status to the backend whenever it changes — this is
+  // what makes it visible to the admin as a real DB value instead of each
+  // app silently guessing. Fire once on mount too, so the DB reflects
+  // reality immediately after login rather than waiting for the next hour
+  // boundary to cross.
+  useEffect(() => {
+    DriverDashboardService.updateDutyStatus(isAvailable ? "on_duty" : "off_duty").catch(() => {
+      // Non-fatal — the UI's own automatic calculation still works locally
+      // even if this particular sync call fails (e.g. transient network drop).
+    });
+  }, [isAvailable]);
+
   useEffect(() => {
     const interval = setInterval(() => {
       const hour = new Date().getHours();
@@ -410,92 +364,6 @@ function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> })
         <Animated.View style={[styles.statusPulse, { backgroundColor: statusColor }, pulseStyle]} />
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       </View>
-    </Animated.View>
-  );
-}
-
-/* ============================================================
-   LIVE MAP CARD
-============================================================ */
-function LiveMapCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
-  const webviewRef = useRef<WebView>(null);
-  const [coords, setCoords] = useState(FALLBACK_LOCATION);
-  const [mapReady, setMapReady] = useState(false);
-  const [locationReady, setLocationReady] = useState(false);
-
-  const html = useMemo(
-    () => buildLeafletHtml(coords.lat, coords.lng, palette.scheme === "dark"),
-    // Only rebuild HTML on theme change / first load, not every coord tick
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [palette.scheme]
-  );
-
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          const position = await Location.getCurrentPositionAsync({});
-          if (isMounted) {
-            setCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
-          }
-        }
-      } catch (e) {
-        // Fall back silently to default coordinates
-      } finally {
-        if (isMounted) setLocationReady(true);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Demo movement simulation - nudges the marker every few seconds
-  useEffect(() => {
-    if (!mapReady) return;
-    const interval = setInterval(() => {
-      setCoords((prev) => {
-        const next = {
-          lat: prev.lat + (Math.random() - 0.5) * 0.0006,
-          lng: prev.lng + (Math.random() - 0.5) * 0.0006,
-        };
-        webviewRef.current?.injectJavaScript(
-          `updateMarker(${next.lat}, ${next.lng}); true;`
-        );
-        return next;
-      });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [mapReady]);
-
-  return (
-    <Animated.View
-      entering={FadeInDown.duration(500).delay(80)}
-      style={[styles.mapCard, { backgroundColor: palette.card, borderColor: palette.border }]}
-    >
-      <WebView
-        ref={webviewRef}
-        originWhitelist={["*"]}
-        source={{ html }}
-        style={styles.mapWebview}
-        onLoadEnd={() => setMapReady(true)}
-        javaScriptEnabled
-        domStorageEnabled
-        startInLoadingState={false}
-      />
-
-      {(!mapReady || !locationReady) && (
-        <View style={[styles.mapLoadingOverlay, { backgroundColor: palette.card }]}>
-          <ActivityIndicator size="small" color={palette.primary} />
-          <Text style={[styles.mapLoadingText, { color: palette.muted }]}>Locating you…</Text>
-        </View>
-      )}
-
-      <Pressable style={[styles.layersButton, { backgroundColor: palette.card }]}>
-        <Ionicons name="layers-outline" size={18} color={palette.text} />
-      </Pressable>
     </Animated.View>
   );
 }
@@ -815,19 +683,90 @@ export default function DriverDashboardScreen() {
     [router]
   );
 
-  const handleNavigateToTask = useCallback((task: DemoTask) => {
-    const url = Platform.select({
-      ios: `http://maps.apple.com/?daddr=${task.lat},${task.lng}`,
-      android: `geo:${task.lat},${task.lng}?q=${task.lat},${task.lng}(${encodeURIComponent(
-        task.customerName
-      )})`,
-      default: `https://www.openstreetmap.org/?mlat=${task.lat}&mlon=${task.lng}#map=16/${task.lat}/${task.lng}`,
-    });
-    if (url) Linking.openURL(url).catch(() => {});
+  const handleNavigateToTask = useCallback(
+    (task: DemoTask) => {
+      // Was opening OpenStreetMap externally — now opens the in-app map
+      // showing all of today's stops, focused/popup-opened on this one.
+      router.push(`/driver/maps?focusId=${task.id}` as any);
+    },
+    [router]
+  );
+
+  /* ---------- Real tasks + stats from the backend ---------- */
+  const [tasks, setTasks] = useState<DriverTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [stats, setStats] = useState<DriverDailyStats>({
+    todayDeliveries: 0,
+    completed: 0,
+    pending: 0,
+    distanceKm: 0,
+  });
+
+  const loadDashboardData = useCallback(async () => {
+    try {
+      const [tasksResult, statsResult] = await Promise.all([
+        DriverDashboardService.getTodayTasks(),
+        DriverDashboardService.getTodayStats(),
+      ]);
+      setTasks(tasksResult);
+      setStats(statsResult);
+    } catch (e) {
+      // Keep whatever was last successfully loaded rather than clearing the
+      // screen on a transient network error.
+    } finally {
+      setTasksLoading(false);
+    }
   }, []);
 
-  const completedCount = DEMO_TASKS.filter((t) => t.status === "Completed").length;
-  const pendingCount = DEMO_TASKS.filter((t) => t.status !== "Completed").length;
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData]);
+
+  /* ---------- Real-time distance tracking (Haversine, server-side) ----------
+     While the driver is on duty (same 7AM-5PM window WorkStatusCard uses),
+     ping the current GPS position to the backend every 15s. The backend
+     computes the Haversine distance from the last stored point and
+     accumulates it into today's total; the returned running total updates
+     the Quick Stats card immediately, without waiting for a full stats
+     refetch. Off duty, no pings are sent and no distance accrues. */
+  const isOnDuty = useMemo(() => {
+    const hour = new Date().getHours();
+    return hour >= 7 && hour < 17;
+  }, []);
+
+  useEffect(() => {
+    if (!isOnDuty) return;
+
+    let cancelled = false;
+
+    const pingLocation = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const position = await Location.getCurrentPositionAsync({});
+        const updatedDistanceKm = await DriverDashboardService.sendLocationPing(
+          position.coords.latitude,
+          position.coords.longitude
+        );
+        if (!cancelled) {
+          setStats((prev) => ({ ...prev, distanceKm: updatedDistanceKm }));
+        }
+      } catch (e) {
+        // Skip this tick silently — GPS/network hiccups shouldn't interrupt
+        // the interval or surface an error to the driver mid-delivery.
+      }
+    };
+
+    pingLocation(); // first ping immediately, then every 15s
+    const interval = setInterval(pingLocation, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isOnDuty]);
+
+  const displayTasks = useMemo(() => tasks.map(mapDriverTaskToDisplayTask), [tasks]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
@@ -862,7 +801,7 @@ export default function DriverDashboardScreen() {
           </View>
 
           <FlatList
-            data={DEMO_TASKS}
+            data={displayTasks}
             keyExtractor={(item) => item.id}
             scrollEnabled={false}
             renderItem={({ item }) => (
@@ -874,6 +813,15 @@ export default function DriverDashboardScreen() {
               />
             )}
             ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
+            ListEmptyComponent={
+              tasksLoading ? (
+                <ActivityIndicator color={palette.primary} style={{ marginVertical: 20 }} />
+              ) : (
+                <Text style={{ color: palette.muted, fontSize: 13, paddingVertical: 20 }}>
+                  No active deliveries assigned right now.
+                </Text>
+              )
+            }
           />
 
           <Text style={[styles.sectionTitle, { color: palette.text, marginTop: 26, marginBottom: 14 }]}>
@@ -884,7 +832,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="cube-outline"
               label="Today's Deliveries"
-              value={String(DEMO_TASKS.length)}
+              value={String(stats.todayDeliveries)}
               color={palette.primary}
               palette={palette}
               delay={0}
@@ -892,7 +840,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="checkmark-done-outline"
               label="Completed"
-              value={String(completedCount)}
+              value={String(stats.completed)}
               color={palette.success}
               palette={palette}
               delay={60}
@@ -900,7 +848,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="hourglass-outline"
               label="Pending"
-              value={String(pendingCount)}
+              value={String(stats.pending)}
               color={palette.warning}
               palette={palette}
               delay={120}
@@ -908,7 +856,7 @@ export default function DriverDashboardScreen() {
             <QuickStatCard
               icon="speedometer-outline"
               label="Distance Travelled"
-              value="18.6 km"
+              value={`${stats.distanceKm.toFixed(1)} km`}
               color={palette.secondary}
               palette={palette}
               delay={180}
@@ -1061,44 +1009,6 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-  },
-
-  /* Live Map */
-  mapCard: {
-    height: 260,
-    borderRadius: 22,
-    borderWidth: 1,
-    overflow: "hidden",
-    marginBottom: 22,
-  },
-  mapWebview: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
-  mapLoadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  mapLoadingText: {
-    marginTop: 8,
-    fontSize: 12.5,
-    fontWeight: "600",
-  },
-  layersButton: {
-    position: "absolute",
-    top: 14,
-    right: 14,
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 3,
   },
 
   /* Section header */
