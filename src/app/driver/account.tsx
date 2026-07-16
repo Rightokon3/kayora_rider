@@ -686,15 +686,15 @@ export default function DriverAccountScreen() {
 
   const handleSignOut = useCallback(async () => {
     setSignOutVisible(false);
-    // Goes through the shared DriverAuthContext (not raw SecureStore calls
-    // for the old demo keys) so it clears the REAL token/expiry AND updates
-    // the same status the route guard reads from — otherwise the guard
-    // would still think "authed" after this, exactly the stale-status bug
-    // that caused the login redirect loop, just triggered from the other
-    // direction.
+    // Goes through the shared DriverAuthContext so it clears the real
+    // token/expiry AND updates the same status the route guard reads from.
+    // No manual router.replace() here on purpose: the moment signOut() sets
+    // status to "guest", DriverGuard (app/driver/_layout.tsx) re-renders and
+    // redirects to /driver/login on its own. Calling router.replace() here
+    // TOO created two competing navigations firing at once, which is what
+    // caused the "Maximum update depth exceeded" crash.
     await signOut();
-    router.replace("/driver/login" as any);
-  }, [router, signOut]);
+  }, [signOut]);
 
   /* Entrance animation */
   const entranceOpacity = useSharedValue(0);
@@ -1291,7 +1291,7 @@ const styles = StyleSheet.create({
 
   /* Confirm Dialog */
   confirmOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(15,23,42,0.5)",
     alignItems: "center",
     justifyContent: "center",

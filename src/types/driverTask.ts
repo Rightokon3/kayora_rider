@@ -56,7 +56,15 @@ export interface DriverDailyStats {
   todayDeliveries: number;
   completed: number;
   pending: number;
+  active: number;
   distanceKm: number;
+}
+
+export type ChartRange = "day" | "week" | "month" | "year";
+
+export interface ChartPoint {
+  label: string;
+  value: number;
 }
 
 export type DutyStatus = "on_duty" | "off_duty";

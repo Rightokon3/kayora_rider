@@ -240,7 +240,7 @@ export default function DriverLoginScreen() {
                 <Ionicons name="person-outline" size={20} color={COLORS.subtitle} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="DRV0001 or driver@kayora.com"
+                  placeholder="Your ID or Email"
                   placeholderTextColor={COLORS.subtitle}
                   autoCapitalize="none"
                   autoCorrect={false}

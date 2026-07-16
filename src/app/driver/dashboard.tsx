@@ -18,28 +18,26 @@ import {
   ActivityIndicator,
   Platform,
   useWindowDimensions,
-  ColorSchemeName,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
-import { DriverDashboardService } from "../../services/driverDashboard";
-import { DriverTask, DriverDailyStats } from "../../types/driverTask";
-import { LiveMapCard } from "../../components/LiveMapCard";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
   withSpring,
-  withDelay,
   withRepeat,
   withSequence,
   Easing,
   FadeInDown,
-  FadeIn,
 } from "react-native-reanimated";
+import { DriverDashboardService } from "../../services/driverDashboard";
+import { DriverProfileService } from "../../services/driverProfile";
+import { DriverTask, DriverDailyStats } from "../../types/driverTask";
+import { LiveMapCard } from "../../components/LiveMapCard";
 
 /* ============================================================
    BRAND COLORS
@@ -89,21 +87,30 @@ function getPalette(scheme: Scheme) {
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 
 /* ============================================================
-   DEMO DATA
+   SIGNED-IN DRIVER (fetched, not hardcoded)
+   ------------------------------------------------------------
+   Replaces the old DEMO_DRIVER constant. Shown as "Driver" with
+   no avatar while loading/on error, rather than a fake name, so
+   it never lies about who's actually logged in.
 ============================================================ */
-const DEMO_DRIVER = {
-  name: "John Sunday",
-  phone: "+2348012345678",
-  driverId: "DRV-0001",
-  vehicle: "Kayora Delivery Van",
-  plate: "AKD-245-KY",
-  profilePicture: null as string | null,
-};
+interface SignedInDriver {
+  name: string;
+  profilePicture: string | null;
+}
 
+/* ============================================================
+   TASK DISPLAY TYPES
+   ------------------------------------------------------------
+   TaskCard renders a simplified 3-value status/priority. Real
+   DriverTask records from the backend (8-value status, 3-value
+   priority) are mapped into this shape below — mapDriverTaskTo
+   DisplayTask is the ONLY place that needs to know how one
+   collapses into the other.
+============================================================ */
 type TaskPriority = "High" | "Medium" | "Low";
 type TaskStatus = "Assigned" | "In Progress" | "Completed";
 
-interface DemoTask {
+interface DisplayTask {
   id: string;
   customerName: string;
   customerPicture: string | null;
@@ -119,14 +126,7 @@ interface DemoTask {
   lng: number;
 }
 
-/**
- * TaskCard below was originally built against DemoTask's simplified 3-value
- * status/priority. Rather than rewrite that whole card component, real
- * DriverTask records from the backend are mapped into this same shape —
- * so this function is the ONLY place that needs to know how the backend's
- * 8-status / 3-priority order model collapses into the card's display model.
- */
-function mapDriverTaskToDisplayTask(task: DriverTask): DemoTask {
+function mapDriverTaskToDisplayTask(task: DriverTask): DisplayTask {
   const statusMap: Record<string, TaskStatus> = {
     Assigned: "Assigned",
     Preparing: "Assigned",
@@ -141,7 +141,10 @@ function mapDriverTaskToDisplayTask(task: DriverTask): DemoTask {
   };
 
   const firstItem = task.items[0];
-  const bottleSummary = task.items.length > 1 ? `${firstItem?.bottleName ?? "Order"} +${task.items.length - 1} more` : firstItem?.bottleName ?? "—";
+  const bottleSummary =
+    task.items.length > 1
+      ? `${firstItem?.bottleName ?? "Order"} +${task.items.length - 1} more`
+      : firstItem?.bottleName ?? "—";
   const totalQuantity = task.items.reduce((sum, item) => sum + item.quantity, 0);
 
   return {
@@ -162,7 +165,7 @@ function mapDriverTaskToDisplayTask(task: DriverTask): DemoTask {
 }
 
 /* ============================================================
-   TOP NAV TABS
+   TOP / BOTTOM NAV CONFIG
 ============================================================ */
 const TOP_TABS = [
   { key: "orders", label: "My Orders", route: "/driver/orders" as const },
@@ -170,9 +173,6 @@ const TOP_TABS = [
   { key: "account", label: "My Account", route: "/driver/account" as const },
 ];
 
-/* ============================================================
-   BOTTOM NAV TABS
-============================================================ */
 const BOTTOM_TABS = [
   { key: "dashboard", label: "Dashboard", icon: "car-sport", route: "/driver/dashboard" as const },
   { key: "orders", label: "Orders", icon: "receipt-outline", route: "/driver/orders" as const },
@@ -185,12 +185,14 @@ const BOTTOM_TABS = [
 ============================================================ */
 function DashboardHeader({
   palette,
+  driver,
   themeMode,
   onCycleTheme,
   onOpenNotifications,
   onOpenProfile,
 }: {
   palette: ReturnType<typeof getPalette>;
+  driver: SignedInDriver;
   themeMode: ThemeMode;
   onCycleTheme: () => void;
   onOpenNotifications: () => void;
@@ -199,7 +201,7 @@ function DashboardHeader({
   const themeIcon =
     themeMode === "light" ? "sunny-outline" : themeMode === "dark" ? "moon-outline" : "contrast-outline";
 
-  const initial = DEMO_DRIVER.name.trim().charAt(0).toUpperCase();
+  const initial = driver.name.trim().charAt(0).toUpperCase() || "D";
 
   return (
     <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
@@ -231,8 +233,8 @@ function DashboardHeader({
         </Pressable>
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
-          {DEMO_DRIVER.profilePicture ? (
-            <Image source={{ uri: DEMO_DRIVER.profilePicture }} style={styles.avatarImage} />
+          {driver.profilePicture ? (
+            <Image source={{ uri: driver.profilePicture }} style={styles.avatarImage} />
           ) : (
             <View style={[styles.avatarFallback, { backgroundColor: palette.secondary }]}>
               <Text style={styles.avatarFallbackText}>{initial}</Text>
@@ -300,7 +302,7 @@ function TopTabsBar({ palette, onNavigate }: { palette: ReturnType<typeof getPal
 }
 
 /* ============================================================
-   WORK STATUS CARD (Automatic availability)
+   WORK STATUS CARD (Automatic availability, synced to backend)
 ============================================================ */
 function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> }) {
   const [isAvailable, setIsAvailable] = useState(() => {
@@ -310,13 +312,13 @@ function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> })
 
   // Push the computed status to the backend whenever it changes — this is
   // what makes it visible to the admin as a real DB value instead of each
-  // app silently guessing. Fire once on mount too, so the DB reflects
+  // app silently guessing. Fires once on mount too, so the DB reflects
   // reality immediately after login rather than waiting for the next hour
   // boundary to cross.
   useEffect(() => {
     DriverDashboardService.updateDutyStatus(isAvailable ? "on_duty" : "off_duty").catch(() => {
       // Non-fatal — the UI's own automatic calculation still works locally
-      // even if this particular sync call fails (e.g. transient network drop).
+      // even if this particular sync call fails (e.g. a transient network drop).
     });
   }, [isAvailable]);
 
@@ -377,7 +379,7 @@ const priorityColor = (priority: TaskPriority, palette: ReturnType<typeof getPal
   return palette.success;
 };
 
-const statusColor = (status: TaskStatus, palette: ReturnType<typeof getPalette>) => {
+const taskStatusColor = (status: TaskStatus, palette: ReturnType<typeof getPalette>) => {
   if (status === "Completed") return palette.success;
   if (status === "In Progress") return palette.secondary;
   return palette.primary;
@@ -389,10 +391,10 @@ const TaskCard = memo(function TaskCard({
   onViewDetails,
   onNavigate,
 }: {
-  task: DemoTask;
+  task: DisplayTask;
   palette: ReturnType<typeof getPalette>;
   onViewDetails: (id: string) => void;
-  onNavigate: (task: DemoTask) => void;
+  onNavigate: (task: DisplayTask) => void;
 }) {
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -454,10 +456,10 @@ const TaskCard = memo(function TaskCard({
         <View
           style={[
             styles.statusBadge,
-            { backgroundColor: statusColor(task.status, palette) + "1A" },
+            { backgroundColor: taskStatusColor(task.status, palette) + "1A" },
           ]}
         >
-          <Text style={[styles.statusBadgeText, { color: statusColor(task.status, palette) }]}>
+          <Text style={[styles.statusBadgeText, { color: taskStatusColor(task.status, palette) }]}>
             {task.status}
           </Text>
         </View>
@@ -531,34 +533,6 @@ function QuickStatCard({
 /* ============================================================
    BOTTOM NAVIGATION
 ============================================================ */
-function BottomNav({
-  palette,
-  activeKey,
-  onNavigate,
-}: {
-  palette: ReturnType<typeof getPalette>;
-  activeKey: string;
-  onNavigate: (route: string) => void;
-}) {
-  return (
-    <View style={[styles.bottomNav, { backgroundColor: palette.headerBg, borderTopColor: palette.border }]}>
-      {BOTTOM_TABS.map((tab) => {
-        const isActive = tab.key === activeKey;
-        return (
-          <BottomNavItem
-            key={tab.key}
-            label={tab.label}
-            icon={tab.icon as keyof typeof Ionicons.glyphMap}
-            isActive={isActive}
-            color={isActive ? palette.primary : palette.muted}
-            onPress={() => onNavigate(tab.route)}
-          />
-        );
-      })}
-    </View>
-  );
-}
-
 function BottomNavItem({
   label,
   icon,
@@ -592,6 +566,34 @@ function BottomNavItem({
   );
 }
 
+function BottomNav({
+  palette,
+  activeKey,
+  onNavigate,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  activeKey: string;
+  onNavigate: (route: string) => void;
+}) {
+  return (
+    <View style={[styles.bottomNav, { backgroundColor: palette.headerBg, borderTopColor: palette.border }]}>
+      {BOTTOM_TABS.map((tab) => {
+        const isActive = tab.key === activeKey;
+        return (
+          <BottomNavItem
+            key={tab.key}
+            label={tab.label}
+            icon={tab.icon as keyof typeof Ionicons.glyphMap}
+            isActive={isActive}
+            color={isActive ? palette.primary : palette.muted}
+            onPress={() => onNavigate(tab.route)}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
 /* ============================================================
    MAIN DASHBOARD SCREEN
 ============================================================ */
@@ -600,6 +602,7 @@ export default function DriverDashboardScreen() {
   const { width } = useWindowDimensions();
   const isWideScreen = width >= 720;
 
+  /* ---------- Theme ---------- */
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [systemScheme, setSystemScheme] = useState<Scheme>(
     (Appearance.getColorScheme() as Scheme) || "light"
@@ -638,6 +641,7 @@ export default function DriverDashboardScreen() {
     }
   }, [themeMode]);
 
+  /* ---------- Entrance animation ---------- */
   const entranceOpacity = useSharedValue(0);
   const entranceTranslate = useSharedValue(16);
   useEffect(() => {
@@ -649,6 +653,24 @@ export default function DriverDashboardScreen() {
     transform: [{ translateY: entranceTranslate.value }],
   }));
 
+  /* ---------- Signed-in driver (real, not hardcoded) ---------- */
+  const [driver, setDriver] = useState<SignedInDriver>({ name: "Driver", profilePicture: null });
+
+  useEffect(() => {
+    DriverProfileService.getMyProfile()
+      .then((data) => {
+        setDriver({
+          name: data.driver.name,
+          profilePicture: (data.profile?.profile_image as string | undefined) ?? null,
+        });
+      })
+      .catch(() => {
+        // Keep the "Driver" placeholder rather than showing a broken state —
+        // the rest of the dashboard still works even if this call fails.
+      });
+  }, []);
+
+  /* ---------- Navigation handlers ---------- */
   const handleTopTabNavigate = useCallback(
     (route: string) => {
       router.push(route as any);
@@ -684,9 +706,9 @@ export default function DriverDashboardScreen() {
   );
 
   const handleNavigateToTask = useCallback(
-    (task: DemoTask) => {
-      // Was opening OpenStreetMap externally — now opens the in-app map
-      // showing all of today's stops, focused/popup-opened on this one.
+    (task: DisplayTask) => {
+      // Opens the in-app map showing all of today's stops, focused/popup-
+      // opened on this one, instead of an external maps app.
       router.push(`/driver/maps?focusId=${task.id}` as any);
     },
     [router]
@@ -699,6 +721,7 @@ export default function DriverDashboardScreen() {
     todayDeliveries: 0,
     completed: 0,
     pending: 0,
+    active: 0,
     distanceKm: 0,
   });
 
@@ -772,6 +795,7 @@ export default function DriverDashboardScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
       <DashboardHeader
         palette={palette}
+        driver={driver}
         themeMode={themeMode}
         onCycleTheme={handleCycleTheme}
         onOpenNotifications={handleOpenNotifications}

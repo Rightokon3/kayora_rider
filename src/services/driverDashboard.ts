@@ -1,5 +1,5 @@
 import { apiFetch } from "./api";
-import { DriverTask, DriverDailyStats, DutyStatus, TaskItem } from "../types/driverTask";
+import { DriverTask, DriverDailyStats, DutyStatus, TaskItem, ChartRange, ChartPoint } from "../types/driverTask";
 
 /* ============================================================
    DRIVER DASHBOARD SERVICE
@@ -86,8 +86,17 @@ export const DriverDashboardService = {
       todayDeliveries: raw.todayDeliveries,
       completed: raw.completed,
       pending: raw.pending,
+      active: raw.active,
       distanceKm: Number(raw.distanceKm),
     };
+  },
+
+  /**
+   * Powers tasks.tsx's Delivery Performance chart. Backend already returns
+   * {label, value}[] in the right shape — no mapping needed beyond typing it.
+   */
+  async getPerformance(range: ChartRange): Promise<ChartPoint[]> {
+    return apiFetch<ChartPoint[]>(`/driver/tasks/performance?range=${range}`);
   },
 
   async updateDutyStatus(status: DutyStatus): Promise<void> {

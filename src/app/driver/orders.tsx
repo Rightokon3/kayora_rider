@@ -23,9 +23,8 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import TrackingMap from "../../components/TrackingMap";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
@@ -41,6 +40,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { DriverOrdersService } from "../../services/driverOrders";
 import { DriverOrder } from "../../types/driverOrder";
+import TrackingMap from "../../components/TrackingMap";
 
 /* ============================================================
    BRAND COLORS
@@ -111,14 +111,6 @@ const BOTTOM_TABS = [
 
 /* ============================================================
    DISPLAY MODEL
-   ------------------------------------------------------------
-   The card UI collapses the backend's 8-value order status into
-   a simpler 3-bucket Pending/Active/Completed + subStatus, same
-   pattern as the dashboard's task mapping. mapOrderToDisplay is
-   the ONLY place that needs to know how one becomes the other.
-   isAsapOffer is the ONLY condition that shows Accept/Decline —
-   an ASAP order the driver has already accepted just looks like
-   a normal Active order from here on.
 ============================================================ */
 type DisplayStatus = "Pending" | "Active" | "Completed";
 type DisplaySubStatus = "Assigned" | "In Progress" | "Completed";
@@ -203,12 +195,6 @@ function mapOrderToDisplay(order: DriverOrder): DisplayOrder {
     price: order.amount,
     paymentMethod: order.paymentMethod ?? "—",
     isAsap,
-    status,
-    subStatus,
-    // The ONLY thing that gates Accept/Decline: an ASAP order that's still
-    // Pending AND hasn't been claimed by anyone yet (offeredToMe, from the
-    // service mapper). A regular order sitting at Pending would NOT show
-    // these buttons, matching "only ASAP delivery comes with that option."
     isAsapOffer: isAsap && order.offeredToMe,
     distanceKm: order.distanceKm ?? 0,
     eta: order.eta ?? "—",
@@ -229,7 +215,9 @@ const FILTERS: { key: DisplayStatus; label: string }[] = [
   { key: "Completed", label: "Completed" },
 ];
 
-
+/* ============================================================
+   HELPERS
+============================================================ */
 function formatNaira(amount: number) {
   return `₦${amount.toLocaleString("en-NG")}`;
 }
@@ -497,8 +485,6 @@ const OrderCard = memo(function OrderCard({
         </View>
       </View>
 
-      {/* Accept / Decline — ONLY for an ASAP order still awaiting response.
-          A regular Pending order never reaches this branch. */}
       {order.isAsapOffer && (
         <>
           <View style={styles.taskButtonsRow}>
@@ -676,12 +662,6 @@ function Toast({ message, palette }: { message: string | null; palette: ReturnTy
 
 /* ============================================================
    TRACK DELIVERY MODAL
-   ------------------------------------------------------------
-   Polls GET /driver/orders/{id}/track every few seconds. That
-   endpoint reads the driver's current_latitude/longitude, which
-   the dashboard's separate location-ping loop is already writing
-   in real time — so the marker here reflects genuine GPS
-   movement, not a client-side simulation.
 ============================================================ */
 function TrackDeliveryModal({
   order,
@@ -955,6 +935,7 @@ function BottomNav({
 ============================================================ */
 export default function DriverOrdersScreen() {
   const router = useRouter();
+  const { trackOrderId } = useLocalSearchParams<{ trackOrderId?: string }>();
   const { width } = useWindowDimensions();
   const isWideScreen = width >= 720;
 
@@ -1046,9 +1027,12 @@ export default function DriverOrdersScreen() {
     })();
   }, [loadOrders]);
 
-  // ASAP offers can arrive at any moment (a nearby order just got dispatched
-  // to this driver) — poll periodically so a new offer shows up without the
-  // driver needing to manually refresh.
+  useEffect(() => {
+    if (!trackOrderId || orders.length === 0) return;
+    const match = orders.find((o) => o.id === trackOrderId);
+    if (match) setTrackingOrder(match);
+  }, [trackOrderId, orders]);
+
   useEffect(() => {
     const interval = setInterval(loadOrders, 20000);
     return () => clearInterval(interval);
@@ -1117,9 +1101,6 @@ export default function DriverOrdersScreen() {
 
   const handleDecline = useCallback(
     async (order: DisplayOrder) => {
-      // Optimistic removal — the order is about to be re-offered to the
-      // next nearest driver, so it shouldn't sit in this driver's list
-      // waiting for the network round-trip.
       setOrders((prev) => prev.filter((o) => o.apiId !== order.apiId));
       try {
         await DriverOrdersService.declineOrder(order.apiId);
@@ -1265,7 +1246,6 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   scrollContent: { paddingTop: 16 },
 
-  /* Header */
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1283,7 +1263,6 @@ const styles = StyleSheet.create({
   avatarFallback: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   avatarFallbackText: { color: "#FFFFFF", fontWeight: "700", fontSize: 15 },
 
-  /* Top Tabs */
   topTabsWrapper: { paddingHorizontal: 16 },
   topTabsRow: { flexDirection: "row", gap: 26 },
   topTabItem: { paddingBottom: 12 },
@@ -1291,13 +1270,11 @@ const styles = StyleSheet.create({
   topTabsBaseline: { height: 1, width: "100%" },
   topTabsUnderline: { position: "absolute", bottom: 0, height: 2, borderRadius: 2 },
 
-  /* Page title */
   pageTitle: { fontSize: 26, fontWeight: "800", marginTop: 6, marginBottom: 16 },
 
   errorBanner: { borderRadius: 12, padding: 14, marginBottom: 16 },
   errorBannerText: { fontSize: 12.5, fontWeight: "700" },
 
-  /* Filter Pills */
   filterWrap: {
     flexDirection: "row",
     borderRadius: 14,
@@ -1316,7 +1293,6 @@ const styles = StyleSheet.create({
   filterCountBadge: { minWidth: 18, height: 18, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
   filterCountText: { fontSize: 10.5, fontWeight: "800" },
 
-  /* Order Card */
   orderCard: { borderWidth: 1, borderRadius: 20, padding: 16 },
   asapBadge: {
     alignSelf: "flex-start",
@@ -1386,13 +1362,11 @@ const styles = StyleSheet.create({
   },
   ghostButtonText: { fontSize: 13, fontWeight: "700" },
 
-  /* Empty State */
   emptyState: { alignItems: "center", justifyContent: "center", paddingVertical: 64 },
   emptyIconCircle: { width: 84, height: 84, borderRadius: 42, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   emptyTitle: { fontSize: 17, fontWeight: "800", marginBottom: 6 },
   emptySubtitle: { fontSize: 13, textAlign: "center", maxWidth: 260 },
 
-  /* Confirm Dialog */
   confirmOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.5)",
@@ -1410,7 +1384,6 @@ const styles = StyleSheet.create({
   confirmButtonYes: { flex: 1, height: 46, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   confirmButtonYesText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
 
-  /* Success Overlay */
   successOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.45)",
@@ -1422,7 +1395,6 @@ const styles = StyleSheet.create({
   successCircle: { width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   successMessage: { fontSize: 16, fontWeight: "800", textAlign: "center" },
 
-  /* Toast */
   toastWrap: {
     position: "absolute",
     bottom: 100,
@@ -1442,7 +1414,6 @@ const styles = StyleSheet.create({
   },
   toastText: { color: "#FFFFFF", fontSize: 12.5, fontWeight: "600", flexShrink: 1 },
 
-  /* Track / Details Modal */
   trackModalCard: {
     flex: 1,
     marginTop: 40,
@@ -1464,7 +1435,6 @@ const styles = StyleSheet.create({
   detailLabel: { fontSize: 12.5, fontWeight: "600" },
   detailValue: { fontSize: 12.5, fontWeight: "700", maxWidth: "60%", textAlign: "right" },
 
-  /* Bottom Nav */
   bottomNav: {
     flexDirection: "row",
     borderTopWidth: 1,

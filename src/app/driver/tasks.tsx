@@ -15,8 +15,10 @@ import {
   FlatList,
   Image,
   Appearance,
+  ActivityIndicator,
   Platform,
   Modal,
+  RefreshControl,
   useWindowDimensions,
   KeyboardAvoidingView,
 } from "react-native";
@@ -37,6 +39,10 @@ import Animated, {
   FadeOut,
   ZoomIn,
 } from "react-native-reanimated";
+import { DriverOrdersService } from "../../services/driverOrders";
+import { DriverOrder } from "../../types/driverOrder";
+import { DriverDashboardService } from "../../services/driverDashboard";
+import { DriverDailyStats, ChartRange, ChartPoint } from "../../types/driverTask";
 
 /* ============================================================
    BRAND COLORS
@@ -89,18 +95,6 @@ function getPalette(scheme: Scheme) {
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 
 /* ============================================================
-   NOTE ON SHARED STATE
-   ------------------------------------------------------------
-   In production this demo store is lifted into its own module
-   (e.g. src/store/deliveryStore.ts) built with the same shape
-   below, imported by both orders.tsx and tasks.tsx, and later
-   swapped for a Laravel-backed API/query layer without any UI
-   changes. Since only this single file may be generated in this
-   step, the store logic lives here and is written so it can be
-   extracted verbatim later.
-============================================================ */
-
-/* ============================================================
    TOP / BOTTOM NAV CONFIG
 ============================================================ */
 const TOP_TABS = [
@@ -117,14 +111,23 @@ const BOTTOM_TABS = [
 ];
 
 /* ============================================================
-   DEMO DATA TYPES
+   DISPLAY MODEL
+   ------------------------------------------------------------
+   This screen is a second view over the SAME orders DriverOrders
+   Service already fetches for orders.tsx — not a separate "tasks"
+   backend concept. "Scheduled" here means "assigned, not yet
+   Delivered" (covers Assigned/Accepted/Preparing/Out For
+   Delivery, including ASAP orders — those arrive already
+   Assigned per the driver-picker flow, so they just show up here
+   like any other task, no separate handling needed). "Completed"
+   means status === Delivered.
 ============================================================ */
 type TaskPriority = "High" | "Medium" | "Low";
 type TaskStatus = "Scheduled" | "In Progress" | "Completed";
-type PaymentMethod = "Cash" | "Card" | "Transfer";
 
-interface DemoTask {
-  id: string;
+interface DisplayTask {
+  id: string; // order_number — also what orders.tsx's ?trackOrderId= expects
+  apiId: number;
   orderId: string;
   customerName: string;
   customerPhone: string;
@@ -133,7 +136,7 @@ interface DemoTask {
   bottleName: string;
   bottleSize: string;
   quantity: string;
-  paymentMethod: PaymentMethod;
+  paymentMethod: string;
   priority: TaskPriority;
   status: TaskStatus;
   deliveryTime: string;
@@ -143,151 +146,63 @@ interface DemoTask {
   completedAt?: string;
 }
 
-const INITIAL_SCHEDULED: DemoTask[] = [
-  {
-    id: "TASK-2201",
-    orderId: "ORD-3392",
-    customerName: "Tunde Bakare",
-    customerPhone: "+2348034567890",
-    customerPicture: null,
-    address: "45 Airport Road, Benin City",
-    bottleName: "50cl Kayora Table Water",
-    bottleSize: "50cl",
-    quantity: "12 Packs",
-    paymentMethod: "Transfer",
-    priority: "Medium",
-    status: "Scheduled",
-    deliveryTime: "1:05 PM",
-    notes: "Call before arrival.",
-    assignedAt: "11:40 AM",
-  },
-  {
-    id: "TASK-2196",
-    orderId: "ORD-3387",
-    customerName: "Grace Idahosa",
-    customerPhone: "+2348045678901",
-    customerPicture: null,
-    address: "7 Ring Road, Benin City",
-    bottleName: "75cl Sharp-Sharp",
-    bottleSize: "75cl",
-    quantity: "8 Packs",
-    paymentMethod: "Card",
-    priority: "Low",
-    status: "Scheduled",
-    deliveryTime: "1:40 PM",
-    assignedAt: "11:02 AM",
-  },
-  {
-    id: "TASK-2188",
-    orderId: "ORD-3379",
-    customerName: "Michael Osaro",
-    customerPhone: "+2348056789012",
-    customerPicture: null,
-    address: "18 New Lagos Road, Benin City",
-    bottleName: "30cl Sharp-Sharp",
-    bottleSize: "30cl",
-    quantity: "30 Packs",
-    paymentMethod: "Cash",
-    priority: "High",
-    status: "In Progress",
-    deliveryTime: "1:15 PM",
-    assignedAt: "10:20 AM",
-    startedAt: "10:35 AM",
-  },
-];
+function formatTimeLabel(iso: string | null): string | undefined {
+  if (!iso) return undefined;
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
 
-const INITIAL_COMPLETED: DemoTask[] = [
-  {
-    id: "TASK-2140",
-    orderId: "ORD-3350",
-    customerName: "Ifeoma Chukwu",
-    customerPhone: "+2348067890123",
+function mapOrderToTaskDisplay(order: DriverOrder): DisplayTask {
+  const firstItem = order.items[0];
+  const bottleSummary =
+    order.items.length > 1
+      ? `${firstItem?.bottleName ?? "Order"} +${order.items.length - 1} more`
+      : firstItem?.bottleName ?? "—";
+  const totalQuantity = order.items.reduce((sum, item) => sum + item.quantity, 0);
+
+  const priorityMap: Record<string, TaskPriority> = {
+    Urgent: "High",
+    High: "High",
+    Normal: "Medium",
+  };
+
+  const status: TaskStatus =
+    order.status === "Delivered" ? "Completed" : order.status === "Out For Delivery" ? "In Progress" : "Scheduled";
+
+  return {
+    id: order.orderNumber,
+    apiId: order.id,
+    orderId: order.orderNumber,
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
     customerPicture: null,
-    address: "3 Reservation Road, Benin City",
-    bottleName: "50cl Kayora Table Water",
-    bottleSize: "50cl",
-    quantity: "15 Packs",
-    paymentMethod: "Transfer",
-    priority: "Medium",
-    status: "Completed",
-    deliveryTime: "9:50 AM",
-    assignedAt: "8:52 AM",
-    startedAt: "9:05 AM",
-    completedAt: "9:48 AM",
-  },
-  {
-    id: "TASK-2119",
-    orderId: "ORD-3341",
-    customerName: "Bassey Effiong",
-    customerPhone: "+2348078901234",
-    customerPicture: null,
-    address: "22 Uselu Lagos Road, Benin City",
-    bottleName: "30cl Sharp-Sharp",
-    bottleSize: "30cl",
-    quantity: "25 Packs",
-    paymentMethod: "Cash",
-    priority: "Low",
-    status: "Completed",
-    deliveryTime: "8:30 AM",
-    assignedAt: "7:50 AM",
-    startedAt: "8:02 AM",
-    completedAt: "8:27 AM",
-  },
-];
+    address: order.deliveryAddress,
+    bottleName: bottleSummary,
+    bottleSize: firstItem?.size ?? "",
+    quantity: `${totalQuantity} Pack${totalQuantity === 1 ? "" : "s"}`,
+    paymentMethod: order.paymentMethod ?? "—",
+    priority: priorityMap[order.priority] ?? "Medium",
+    status,
+    deliveryTime: order.eta ?? "—",
+    notes: order.specialInstructions ?? undefined,
+    assignedAt: formatTimeLabel(order.assignedAt),
+    startedAt: formatTimeLabel(order.startedAt),
+    completedAt: formatTimeLabel(order.completedAt),
+  };
+}
 
 /* ============================================================
-   CHART DEMO DATA
+   CHART RANGE CONFIG
 ============================================================ */
-type ChartRange = "Day" | "Week" | "Month" | "Year";
-
-const CHART_DATA: Record<ChartRange, { value: number; label: string }[]> = {
-  Day: [
-    { value: 1, label: "8AM" },
-    { value: 3, label: "10AM" },
-    { value: 2, label: "12PM" },
-    { value: 4, label: "2PM" },
-    { value: 3, label: "4PM" },
-    { value: 1, label: "6PM" },
-  ],
-  Week: [
-    { value: 6, label: "Mon" },
-    { value: 9, label: "Tue" },
-    { value: 7, label: "Wed" },
-    { value: 11, label: "Thu" },
-    { value: 8, label: "Fri" },
-    { value: 5, label: "Sat" },
-    { value: 3, label: "Sun" },
-  ],
-  Month: [
-    { value: 28, label: "Wk 1" },
-    { value: 34, label: "Wk 2" },
-    { value: 31, label: "Wk 3" },
-    { value: 22, label: "Wk 4" },
-  ],
-  Year: [
-    { value: 96, label: "Jan" },
-    { value: 110, label: "Feb" },
-    { value: 102, label: "Mar" },
-    { value: 118, label: "Apr" },
-    { value: 124, label: "May" },
-    { value: 108, label: "Jun" },
-  ],
-};
-
-const CHART_RANGES: ChartRange[] = ["Day", "Week", "Month", "Year"];
+const CHART_RANGES: { key: ChartRange; label: string }[] = [
+  { key: "day", label: "Day" },
+  { key: "week", label: "Week" },
+  { key: "month", label: "Month" },
+  { key: "year", label: "Year" },
+];
 
 /* ============================================================
    HELPERS
 ============================================================ */
-function currentTimeLabel() {
-  const now = new Date();
-  let hours = now.getHours();
-  const minutes = now.getMinutes().toString().padStart(2, "0");
-  const suffix = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  return `${hours}:${minutes} ${suffix}`;
-}
-
 function priorityColor(priority: TaskPriority, palette: ReturnType<typeof getPalette>) {
   if (priority === "High") return palette.danger;
   if (priority === "Medium") return palette.warning;
@@ -342,7 +257,7 @@ function DashboardHeader({
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
           <View style={[styles.avatarFallback, { backgroundColor: palette.secondary }]}>
-            <Text style={styles.avatarFallbackText}>J</Text>
+            <Text style={styles.avatarFallbackText}>D</Text>
           </View>
         </Pressable>
       </View>
@@ -422,12 +337,9 @@ function AnalyticsCard({
   palette: ReturnType<typeof getPalette>;
   delay: number;
 }) {
-  const animatedValue = useSharedValue(0);
   const [displayValue, setDisplayValue] = useState(0);
 
   useEffect(() => {
-    animatedValue.value = 0;
-    animatedValue.value = withTiming(value, { duration: 700, easing: Easing.out(Easing.cubic) });
     const start = Date.now();
     const duration = 700;
     const raf = setInterval(() => {
@@ -454,11 +366,25 @@ function AnalyticsCard({
 
 /* ============================================================
    CHART SECTION
+   ------------------------------------------------------------
+   Data/range/loading are all lifted to the parent screen now,
+   since fetching a new range means a real network call
+   (GET /driver/tasks/performance?range=) instead of a local
+   object lookup.
 ============================================================ */
-function DeliveryChart({ palette }: { palette: ReturnType<typeof getPalette> }) {
-  const [range, setRange] = useState<ChartRange>("Week");
-  const data = CHART_DATA[range];
-
+function DeliveryChart({
+  palette,
+  range,
+  onRangeChange,
+  data,
+  loading,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  range: ChartRange;
+  onRangeChange: (range: ChartRange) => void;
+  data: ChartPoint[];
+  loading: boolean;
+}) {
   const barData = useMemo(
     () =>
       data.map((point) => ({
@@ -481,40 +407,44 @@ function DeliveryChart({ palette }: { palette: ReturnType<typeof getPalette> }) 
 
       <View style={[styles.rangeSwitchRow, { backgroundColor: palette.pillBg }]}>
         {CHART_RANGES.map((item) => {
-          const isActive = item === range;
+          const isActive = item.key === range;
           return (
             <Pressable
-              key={item}
-              onPress={() => setRange(item)}
+              key={item.key}
+              onPress={() => onRangeChange(item.key)}
               style={[styles.rangePill, isActive && { backgroundColor: palette.primary }]}
             >
-              <Text style={[styles.rangePillText, { color: isActive ? "#FFFFFF" : palette.muted }]}>{item}</Text>
+              <Text style={[styles.rangePillText, { color: isActive ? "#FFFFFF" : palette.muted }]}>{item.label}</Text>
             </Pressable>
           );
         })}
       </View>
 
-      <View style={{ marginTop: 18, alignItems: "center" }}>
-        <BarChart
-          key={range}
-          data={barData}
-          barWidth={range === "Day" ? 22 : range === "Week" ? 26 : range === "Month" ? 40 : 30}
-          spacing={range === "Year" ? 18 : 22}
-          roundedTop
-          roundedBottom
-          hideRules
-          xAxisThickness={0}
-          yAxisThickness={0}
-          yAxisTextStyle={{ color: palette.muted, fontSize: 10 }}
-          xAxisLabelTextStyle={{ color: palette.muted, fontSize: 10 }}
-          noOfSections={4}
-          isAnimated
-          animationDuration={550}
-          height={180}
-          width={undefined}
-          gradientColor={palette.secondary}
-          showGradient
-        />
+      <View style={{ marginTop: 18, alignItems: "center", minHeight: 180, justifyContent: "center" }}>
+        {loading ? (
+          <ActivityIndicator color={palette.primary} />
+        ) : (
+          <BarChart
+            key={range}
+            data={barData}
+            barWidth={range === "day" ? 22 : range === "week" ? 26 : range === "month" ? 40 : 30}
+            spacing={range === "year" ? 18 : 22}
+            roundedTop
+            roundedBottom
+            hideRules
+            xAxisThickness={0}
+            yAxisThickness={0}
+            yAxisTextStyle={{ color: palette.muted, fontSize: 10 }}
+            xAxisLabelTextStyle={{ color: palette.muted, fontSize: 10 }}
+            noOfSections={4}
+            isAnimated
+            animationDuration={550}
+            height={180}
+            width={undefined}
+            gradientColor={palette.secondary}
+            showGradient
+          />
+        )}
       </View>
     </Animated.View>
   );
@@ -528,9 +458,9 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
   palette,
   onMoreDetails,
 }: {
-  task: DemoTask;
+  task: DisplayTask;
   palette: ReturnType<typeof getPalette>;
-  onMoreDetails: (task: DemoTask) => void;
+  onMoreDetails: (task: DisplayTask) => void;
 }) {
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -618,9 +548,9 @@ const CompletedTaskCard = memo(function CompletedTaskCard({
   palette,
   onViewDetails,
 }: {
-  task: DemoTask;
+  task: DisplayTask;
   palette: ReturnType<typeof getPalette>;
-  onViewDetails: (task: DemoTask) => void;
+  onViewDetails: (task: DisplayTask) => void;
 }) {
   return (
     <Animated.View
@@ -678,6 +608,7 @@ function ConfirmDialog({
   palette,
   title,
   message,
+  loading,
   onYes,
   onNo,
 }: {
@@ -685,6 +616,7 @@ function ConfirmDialog({
   palette: ReturnType<typeof getPalette>;
   title: string;
   message: string;
+  loading: boolean;
   onYes: () => void;
   onNo: () => void;
 }) {
@@ -695,11 +627,11 @@ function ConfirmDialog({
         <Text style={[styles.confirmTitle, { color: palette.text }]}>{title}</Text>
         <Text style={[styles.confirmMessage, { color: palette.muted }]}>{message}</Text>
         <View style={styles.confirmButtonsRow}>
-          <Pressable onPress={onNo} style={[styles.confirmButtonNo, { borderColor: palette.border }]}>
+          <Pressable onPress={onNo} disabled={loading} style={[styles.confirmButtonNo, { borderColor: palette.border }]}>
             <Text style={[styles.confirmButtonNoText, { color: palette.text }]}>No</Text>
           </Pressable>
-          <Pressable onPress={onYes} style={[styles.confirmButtonYes, { backgroundColor: palette.primary }]}>
-            <Text style={styles.confirmButtonYesText}>Yes</Text>
+          <Pressable onPress={onYes} disabled={loading} style={[styles.confirmButtonYes, { backgroundColor: palette.primary }]}>
+            {loading ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.confirmButtonYesText}>Yes</Text>}
           </Pressable>
         </View>
       </Animated.View>
@@ -761,11 +693,11 @@ function TaskDetailsModal({
   onStartDelivery,
   onContinueDelivery,
 }: {
-  task: DemoTask | null;
+  task: DisplayTask | null;
   palette: ReturnType<typeof getPalette>;
   onClose: () => void;
-  onStartDelivery: (task: DemoTask) => void;
-  onContinueDelivery: (task: DemoTask) => void;
+  onStartDelivery: (task: DisplayTask) => void;
+  onContinueDelivery: (task: DisplayTask) => void;
 }) {
   if (!task) return null;
 
@@ -950,12 +882,97 @@ export default function DriverTasksScreen() {
     }
   }, [themeMode]);
 
-  /* Demo Task Store */
-  const [scheduledTasks, setScheduledTasks] = useState<DemoTask[]>(INITIAL_SCHEDULED);
-  const [completedTasks, setCompletedTasks] = useState<DemoTask[]>(INITIAL_COMPLETED);
+  /* ---------- Real tasks (= orders) from the backend ---------- */
+  const [allOrders, setAllOrders] = useState<DriverOrder[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [detailsTask, setDetailsTask] = useState<DemoTask | null>(null);
-  const [confirmTask, setConfirmTask] = useState<DemoTask | null>(null);
+  const loadTasks = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const result = await DriverOrdersService.getOrders();
+      setAllOrders(result);
+    } catch (e) {
+      setLoadError("Could not load tasks. Pull down to try again.");
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      setTasksLoading(true);
+      await loadTasks();
+      setTasksLoading(false);
+    })();
+  }, [loadTasks]);
+
+  const scheduledTasks = useMemo(
+    () =>
+      allOrders
+        .filter((o) => o.status !== "Delivered" && o.status !== "Cancelled")
+        .map(mapOrderToTaskDisplay),
+    [allOrders]
+  );
+
+  const completedTasks = useMemo(
+    () => allOrders.filter((o) => o.status === "Delivered").map(mapOrderToTaskDisplay),
+    [allOrders]
+  );
+
+  /* ---------- Real analytics (Today's Deliveries / Completed / Pending / Active) ---------- */
+  const [stats, setStats] = useState<DriverDailyStats>({
+    todayDeliveries: 0,
+    completed: 0,
+    pending: 0,
+    active: 0,
+    distanceKm: 0,
+  });
+
+  const loadStats = useCallback(async () => {
+    try {
+      const result = await DriverDashboardService.getTodayStats();
+      setStats(result);
+    } catch (e) {
+      // Keep last-known stats rather than zeroing them out on a transient error.
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  /* ---------- Real chart data (GET /driver/tasks/performance?range=) ---------- */
+  const [chartRange, setChartRange] = useState<ChartRange>("week");
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [chartLoading, setChartLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setChartLoading(true);
+      try {
+        const result = await DriverDashboardService.getPerformance(chartRange);
+        if (!cancelled) setChartData(result);
+      } catch (e) {
+        if (!cancelled) setChartData([]);
+      } finally {
+        if (!cancelled) setChartLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chartRange]);
+
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([loadTasks(), loadStats()]);
+    setRefreshing(false);
+  }, [loadTasks, loadStats]);
+
+  const [detailsTask, setDetailsTask] = useState<DisplayTask | null>(null);
+  const [confirmTask, setConfirmTask] = useState<DisplayTask | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -1008,55 +1025,41 @@ export default function DriverTasksScreen() {
   }, []);
 
   /* Task Handlers */
-  const handleMoreDetails = useCallback((task: DemoTask) => setDetailsTask(task), []);
-  const handleViewCompletedDetails = useCallback((task: DemoTask) => setDetailsTask(task), []);
+  const handleMoreDetails = useCallback((task: DisplayTask) => setDetailsTask(task), []);
+  const handleViewCompletedDetails = useCallback((task: DisplayTask) => setDetailsTask(task), []);
 
-  const handleRequestStart = useCallback((task: DemoTask) => {
+  const handleRequestStart = useCallback((task: DisplayTask) => {
     setDetailsTask(null);
     setConfirmTask(task);
   }, []);
 
   const handleContinueDelivery = useCallback(
-    (task: DemoTask) => {
+    (task: DisplayTask) => {
       setDetailsTask(null);
-      // In production this passes the target order id as a route param so
-      // driver/orders.tsx opens the tracking modal for this exact delivery,
-      // e.g. router.push(`/driver/orders?trackOrderId=${task.orderId}`).
-      router.push(`/driver/orders?trackOrderId=${task.orderId}` as any);
+      // orders.tsx now actually reads this param and auto-opens the
+      // tracking modal for the matching order on arrival.
+      router.push(`/driver/orders?trackOrderId=${task.id}` as any);
     },
     [router]
   );
 
-  const handleConfirmYes = useCallback(() => {
+  const handleConfirmYes = useCallback(async () => {
     if (!confirmTask) return;
-    const target = confirmTask;
-    setConfirmTask(null);
-
-    setScheduledTasks((prev) =>
-      prev.map((t) =>
-        t.id === target.id ? { ...t, status: "In Progress", startedAt: currentTimeLabel() } : t
-      )
-    );
-
-    showSuccess("Delivery Started");
-    setTimeout(() => showToast("Customer has been notified that the delivery has started."), 900);
-  }, [confirmTask]);
+    setConfirmLoading(true);
+    try {
+      await DriverOrdersService.startOrder(confirmTask.apiId);
+      setConfirmTask(null);
+      showSuccess("Delivery Started");
+      setTimeout(() => showToast("Customer has been notified that the delivery has started."), 900);
+      await Promise.all([loadTasks(), loadStats()]);
+    } catch (e) {
+      showToast("Could not start this delivery. Please try again.");
+    } finally {
+      setConfirmLoading(false);
+    }
+  }, [confirmTask, loadTasks, loadStats]);
 
   const handleConfirmNo = useCallback(() => setConfirmTask(null), []);
-
-  /* Analytics (derived from live demo state so it stays in sync) */
-  const analytics = useMemo(() => {
-    const activeCount = scheduledTasks.filter((t) => t.status === "In Progress").length;
-    const pendingCount = scheduledTasks.filter((t) => t.status === "Scheduled").length;
-    const completedTodayCount = completedTasks.length;
-    const totalToday = scheduledTasks.length + completedTasks.length;
-    return {
-      totalToday,
-      completedTodayCount,
-      pendingCount,
-      activeCount,
-    };
-  }, [scheduledTasks, completedTasks]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
@@ -1075,6 +1078,7 @@ export default function DriverTasksScreen() {
           style={{ flex: 1, backgroundColor: palette.background }}
           contentContainerStyle={[styles.scrollContent, { paddingHorizontal: isWideScreen ? 32 : 16 }]}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefreshAll} tintColor={palette.primary} colors={[palette.primary]} />}
         >
           <Animated.View style={contentEntrance}>
             <Text style={[styles.pageTitle, { color: palette.text }]}>Today's Tasks</Text>
@@ -1082,11 +1086,17 @@ export default function DriverTasksScreen() {
               Track your assigned deliveries and monitor your daily performance.
             </Text>
 
+            {loadError && (
+              <View style={[styles.errorBanner, { backgroundColor: palette.danger + "1A" }]}>
+                <Text style={[styles.errorBannerText, { color: palette.danger }]}>{loadError}</Text>
+              </View>
+            )}
+
             <View style={styles.analyticsGrid}>
               <AnalyticsCard
                 icon="cube-outline"
                 label="Today's Deliveries"
-                value={analytics.totalToday}
+                value={stats.todayDeliveries}
                 color={palette.primary}
                 palette={palette}
                 delay={0}
@@ -1094,7 +1104,7 @@ export default function DriverTasksScreen() {
               <AnalyticsCard
                 icon="checkmark-done-outline"
                 label="Completed Today"
-                value={analytics.completedTodayCount}
+                value={stats.completed}
                 color={palette.completed}
                 palette={palette}
                 delay={60}
@@ -1102,7 +1112,7 @@ export default function DriverTasksScreen() {
               <AnalyticsCard
                 icon="hourglass-outline"
                 label="Pending Today"
-                value={analytics.pendingCount}
+                value={stats.pending}
                 color={palette.warning}
                 palette={palette}
                 delay={120}
@@ -1110,20 +1120,28 @@ export default function DriverTasksScreen() {
               <AnalyticsCard
                 icon="navigate-outline"
                 label="Active Deliveries"
-                value={analytics.activeCount}
+                value={stats.active}
                 color={palette.secondary}
                 palette={palette}
                 delay={180}
               />
             </View>
 
-            <DeliveryChart palette={palette} />
+            <DeliveryChart
+              palette={palette}
+              range={chartRange}
+              onRangeChange={setChartRange}
+              data={chartData}
+              loading={chartLoading}
+            />
 
             <Text style={[styles.sectionTitle, { color: palette.text, marginTop: 26, marginBottom: 14 }]}>
               Today's Scheduled Deliveries
             </Text>
 
-            {scheduledTasks.length === 0 ? (
+            {tasksLoading ? (
+              <ActivityIndicator color={palette.primary} style={{ marginVertical: 20 }} />
+            ) : scheduledTasks.length === 0 ? (
               <EmptyState palette={palette} icon="calendar-outline" title="No deliveries scheduled today." />
             ) : (
               <FlatList
@@ -1141,7 +1159,9 @@ export default function DriverTasksScreen() {
               Completed Deliveries
             </Text>
 
-            {completedTasks.length === 0 ? (
+            {tasksLoading ? (
+              <ActivityIndicator color={palette.primary} style={{ marginVertical: 20 }} />
+            ) : completedTasks.length === 0 ? (
               <EmptyState palette={palette} icon="checkmark-done-circle-outline" title="No completed deliveries yet." />
             ) : (
               <FlatList
@@ -1175,6 +1195,7 @@ export default function DriverTasksScreen() {
         palette={palette}
         title="Start this delivery?"
         message={`Confirm you are starting delivery for ${confirmTask?.orderId ?? ""}.`}
+        loading={confirmLoading}
         onYes={handleConfirmYes}
         onNo={handleConfirmNo}
       />
@@ -1221,6 +1242,9 @@ const styles = StyleSheet.create({
   /* Page title */
   pageTitle: { fontSize: 26, fontWeight: "800", marginTop: 6 },
   pageSubtitle: { fontSize: 13.5, marginTop: 6, marginBottom: 20, lineHeight: 19 },
+
+  errorBanner: { borderRadius: 12, padding: 14, marginBottom: 16 },
+  errorBannerText: { fontSize: 12.5, fontWeight: "700" },
 
   /* Analytics */
   analyticsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 20 },
@@ -1285,7 +1309,7 @@ const styles = StyleSheet.create({
 
   /* Confirm Dialog */
   confirmOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(15,23,42,0.5)",
     alignItems: "center",
     justifyContent: "center",
@@ -1303,7 +1327,7 @@ const styles = StyleSheet.create({
 
   /* Success Overlay */
   successOverlay: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(15,23,42,0.45)",
     alignItems: "center",
     justifyContent: "center",
