@@ -476,7 +476,7 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
 }) {
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-  const initial = task.customerName.trim().charAt(0).toUpperCase();
+  const initial = (task.customerName ?? "").trim().charAt(0).toUpperCase() || "?";
 
   return (
     <Animated.View
@@ -501,7 +501,7 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
           )}
           <View style={{ marginLeft: 10, flexShrink: 1 }}>
             <Text style={[styles.taskCustomerName, { color: palette.text }]} numberOfLines={1}>
-              {task.customerName}
+              {task.customerName || "Unknown Customer"}
             </Text>
             <Text style={[styles.taskAddress, { color: palette.muted }]} numberOfLines={1}>
               {task.address}
@@ -600,7 +600,7 @@ const CompletedTaskCard = memo(function CompletedTaskCard({
       </View>
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={[styles.taskCustomerName, { color: palette.text }]} numberOfLines={1}>
-          {task.customerName}
+          {task.customerName || "Unknown Customer"}
         </Text>
         <Text style={[styles.taskAddress, { color: palette.muted }]} numberOfLines={1}>
           {task.bottleName} · {task.quantity}
@@ -758,12 +758,12 @@ function TaskDetailsModal({
                 ) : (
                   <View style={[styles.taskAvatarFallback, { backgroundColor: palette.primary }]}>
                     <Text style={styles.taskAvatarFallbackText}>
-                      {task.customerName.trim().charAt(0).toUpperCase()}
+                      {(task.customerName ?? "").trim().charAt(0).toUpperCase() || "?"}
                     </Text>
                   </View>
                 )}
                 <View style={{ marginLeft: 10, flex: 1 }}>
-                  <Text style={[styles.taskCustomerName, { color: palette.text }]}>{task.customerName}</Text>
+                  <Text style={[styles.taskCustomerName, { color: palette.text }]}>{task.customerName || "Unknown Customer"}</Text>
                   <Text style={[styles.taskAddress, { color: palette.muted }]}>{task.customerPhone}</Text>
                 </View>
               </View>
@@ -1212,7 +1212,7 @@ export default function DriverTasksScreen() {
             ) : (
               <FlatList
                 data={scheduledTasks}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => String(item.apiId)}
                 scrollEnabled={false}
                 renderItem={({ item }) => (
                   <ScheduledTaskCard
@@ -1238,7 +1238,7 @@ export default function DriverTasksScreen() {
             ) : (
               <FlatList
                 data={completedTasks}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => String(item.apiId)}
                 scrollEnabled={false}
                 renderItem={({ item }) => (
                   <CompletedTaskCard task={item} palette={palette} onViewDetails={handleViewCompletedDetails} />

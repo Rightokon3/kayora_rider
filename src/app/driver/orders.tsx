@@ -1214,7 +1214,7 @@ export default function DriverOrdersScreen() {
             ) : (
               <FlatList
                 data={filteredOrders}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => String(item.apiId)}
                 scrollEnabled={false}
                 renderItem={({ item }) => (
                   <OrderCard
