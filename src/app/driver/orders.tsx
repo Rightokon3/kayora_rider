@@ -195,7 +195,16 @@ function mapOrderToDisplay(order: DriverOrder): DisplayOrder {
     price: order.amount,
     paymentMethod: order.paymentMethod ?? "—",
     isAsap,
-    isAsapOffer: isAsap && order.offeredToMe,
+    isAsapOffer:
+      isAsap &&
+      // Covers TWO cases: (1) the legacy broadcast system, where a driver
+      // is specifically offered a pending order (order.offeredToMe), and
+      // (2) the new flow, where the customer picks the driver directly at
+      // checkout — the order lands with driver_id already set and
+      // status:'Assigned', with no offer step at all. Either way, if the
+      // raw status is still 'Assigned', the driver hasn't accepted or
+      // declined yet, so Accept/Decline should show.
+      (order.offeredToMe || order.status === "Assigned"),
     distanceKm: order.distanceKm ?? 0,
     eta: order.eta ?? "—",
     createdAt: formatTimeLabel(order.createdAt) ?? "—",
@@ -512,7 +521,7 @@ const OrderCard = memo(function OrderCard({
         </>
       )}
 
-      {order.status === "Active" && (
+      {order.status === "Active" && !order.isAsapOffer && (
         <>
           <View style={styles.taskButtonsRow}>
             <Pressable onPress={() => onTrack(order)} style={[styles.ghostButton, { borderColor: palette.border }]}>
@@ -1027,10 +1036,25 @@ export default function DriverOrdersScreen() {
     })();
   }, [loadOrders]);
 
+  // Honors ?trackOrderId= (tasks.tsx's "Continue Delivery" navigates here
+  // with the order's id attached) to auto-open the modal — but ONLY once.
+  //
+  // A ref-based "already opened" guard is NOT enough here: if this screen
+  // ever remounts (tab switch and back, fast refresh, etc.) while
+  // trackOrderId is still sitting in the URL, a fresh component instance
+  // gets a fresh ref starting at null, and the modal reopens all over
+  // again. The real fix is to clear the param out of the URL itself the
+  // moment it's consumed — router.setParams below — so there is nothing
+  // left in the route for any future render/remount to react to.
   useEffect(() => {
     if (!trackOrderId || orders.length === 0) return;
     const match = orders.find((o) => o.id === trackOrderId);
-    if (match) setTrackingOrder(match);
+    if (match) {
+      setTrackingOrder(match);
+    }
+    // Clear it either way (even if no match yet) so a stale/invalid id
+    // doesn't linger in the URL forever either.
+    router.setParams({ trackOrderId: undefined });
   }, [trackOrderId, orders]);
 
   useEffect(() => {

@@ -20,10 +20,12 @@ import {
   Modal,
   useWindowDimensions,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { useDriverAuth } from "../../context/DriverAuthContext";
+import { apiFetch, ApiError } from "../../services/api";
 import * as SecureStore from "expo-secure-store";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -32,6 +34,7 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSpring,
+  withRepeat,
   Easing,
   FadeInDown,
   FadeIn,
@@ -104,91 +107,82 @@ const BOTTOM_TABS = [
 ];
 
 /* ============================================================
-   DEMO DRIVER DATA
+   API RESPONSE TYPE — mirrors DriverAccountResource exactly
+   (GET /driver/me). Dates and the license "status"/"Busy" logic
+   are already computed server-side; this type should stay in
+   lockstep with DriverAccountResource::toArray() if that changes.
 ============================================================ */
-const DRIVER = {
-  name: "John Sunday",
-  employeeId: "KYA-EMP-0452",
-  driverId: "DRV-0001",
-  profilePicture: null as string | null,
-  onlineStatus: "Available" as "Available" | "Busy" | "Off Duty",
-  yearsWithKayora: 3,
-  rating: 4.8,
-  completedDeliveries: 1284,
-  currentAssignment: "ORD-3387 · Ring Road",
+interface DriverAccountData {
+  name: string;
+  employeeId: string | null;
+  driverId: string;
+  profilePicture: string | null;
+  onlineStatus: "Available" | "Busy" | "Off Duty";
+  yearsWithKayora: number | null;
+  completedDeliveries: number;
+  currentAssignment: string | null;
 
   personal: {
-    fullName: "John Chukwuemeka Sunday",
-    gender: "Male",
-    dob: "14 March 1991",
-    maritalStatus: "Married",
-    nationality: "Nigerian",
-    stateOfOrigin: "Edo State",
-    residentialAddress: "9 Isekhure Street, Benin City",
-    phone: "+234 801 234 5678",
-    email: "driver@kayora.com",
-    emergencyContactName: "Blessing Sunday",
-    emergencyContactPhone: "+234 809 876 5432",
-    bloodGroup: "O+",
-    genotype: "AA",
-    nationalId: "NIN-2938471029",
-    employmentDate: "2 June 2022",
-    department: "Fleet Operations",
-    branch: "Benin City Depot",
-    supervisor: "Engr. Patrick Obaseki",
-  },
+    fullName: string;
+    gender: string | null;
+    dob: string | null;
+    maritalStatus: string | null;
+    stateOfOrigin: string | null;
+    residentialAddress: string | null;
+    phone: string;
+    email: string;
+    emergencyContactName: string | null;
+    emergencyContactPhone: string | null;
+    bloodGroup: string | null;
+    genotype: string | null;
+    nationalId: string | null;
+    employmentDate: string | null;
+    department: string | null;
+    branch: string | null;
+    supervisor: string | null;
+  };
 
   license: {
-    number: "EDS-DL-88213409",
-    issueDate: "10 Jan 2023",
-    expiryDate: "10 Jan 2028",
-    licenseClass: "Class C",
-    issuingAuthority: "FRSC Nigeria",
-    status: "Valid" as const,
-  },
+    number: string | null;
+    expiryDate: string | null;
+    status: "Expired" | "Valid" | null;
+    frontImage: string | null;
+    backImage: string | null;
+    nationalIdImage: string | null;
+  };
 
   vehicle: {
-    type: "Delivery Van" as const,
-    brand: "Toyota",
-    model: "Hiace",
-    color: "White / Kayora Blue",
-    plateNumber: "AKD-245-KY",
-    engineNumber: "ENG-33920184",
-    chassisNumber: "CHS-77281940",
-    fuelType: "Diesel",
-    insuranceStatus: "Active",
-    insuranceExpiry: "22 Sep 2026",
-    vehicleLicenseNumber: "VL-990213",
-    registrationDate: "5 Feb 2022",
-    roadWorthinessExpiry: "18 Nov 2026",
-    assignedDepot: "Benin City Depot",
-    currentMileage: "48,210 km",
-  },
+    type: string;
+    brand: string;
+    model: string;
+    color: string | null;
+    plateNumber: string;
+    engineNumber: string | null;
+    chassisNumber: string | null;
+    image: string | null;
+    registrationImage: string | null;
+    status: "Available" | "Assigned" | "Maintenance";
+  } | null;
 
   work: {
-    todaysTasks: 5,
-    completedToday: 2,
-    pendingTasks: 3,
-    currentShift: "Morning Shift",
-    workingHours: "7:00 AM – 5:00 PM",
-    depot: "Benin City Depot",
-    supervisor: "Engr. Patrick Obaseki",
-  },
-};
+    todaysTasks: number;
+    completedToday: number;
+    pendingTasks: number;
+    depot: string | null;
+    supervisor: string | null;
+  };
+}
 
-const DOCUMENTS = [
-  { key: "insurance", title: "Vehicle Insurance", icon: "shield-checkmark-outline" as const, verified: true },
-  { key: "roadworthiness", title: "Road Worthiness", icon: "construct-outline" as const, verified: true },
-  { key: "vehicleLicense", title: "Vehicle License", icon: "document-text-outline" as const, verified: true },
-  { key: "companyId", title: "Company ID Card", icon: "id-card-outline" as const, verified: true },
-  { key: "medical", title: "Medical Certificate", icon: "medkit-outline" as const, verified: true },
-  { key: "policeClearance", title: "Police Clearance", icon: "shield-outline" as const, verified: false },
-];
+/** Falls back to an em dash for any field the admin hasn't filled in yet. */
+function val(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === "") return "—";
+  return String(v);
+}
 
 /* ============================================================
    HELPERS
 ============================================================ */
-function statusColorFor(status: string, palette: ReturnType<typeof getPalette>) {
+function statusColorFor(status: "Available" | "Busy" | "Off Duty", palette: ReturnType<typeof getPalette>) {
   if (status === "Available") return palette.success;
   if (status === "Busy") return palette.warning;
   return palette.muted;
@@ -203,16 +197,20 @@ function DashboardHeader({
   onCycleTheme,
   onOpenNotifications,
   onOpenProfile,
+  driverName,
+  profilePicture,
 }: {
   palette: ReturnType<typeof getPalette>;
   themeMode: ThemeMode;
   onCycleTheme: () => void;
   onOpenNotifications: () => void;
   onOpenProfile: () => void;
+  driverName: string;
+  profilePicture: string | null;
 }) {
   const themeIcon =
     themeMode === "light" ? "sunny-outline" : themeMode === "dark" ? "moon-outline" : "contrast-outline";
-  const initial = DRIVER.name.trim().charAt(0).toUpperCase();
+  const initial = driverName.trim().charAt(0).toUpperCase() || "D";
 
   return (
     <View style={[styles.headerRow, { backgroundColor: palette.headerBg }]}>
@@ -236,8 +234,8 @@ function DashboardHeader({
         </Pressable>
 
         <Pressable onPress={onOpenProfile} hitSlop={6}>
-          {DRIVER.profilePicture ? (
-            <Image source={{ uri: DRIVER.profilePicture }} style={styles.avatarImage} />
+          {profilePicture ? (
+            <Image source={{ uri: profilePicture }} style={styles.avatarImage} />
           ) : (
             <View style={[styles.avatarFallback, { backgroundColor: palette.secondary }]}>
               <Text style={styles.avatarFallbackText}>{initial}</Text>
@@ -461,12 +459,14 @@ function ImagePreviewModal({
   palette,
   title,
   icon,
+  imageUri,
   onClose,
 }: {
   visible: boolean;
   palette: ReturnType<typeof getPalette>;
   title: string;
   icon: keyof typeof Ionicons.glyphMap;
+  imageUri: string | null;
   onClose: () => void;
 }) {
   if (!visible) return null;
@@ -481,12 +481,20 @@ function ImagePreviewModal({
                 <Ionicons name="close" size={18} color={palette.text} />
               </Pressable>
             </View>
-            <View style={[styles.previewImageArea, { backgroundColor: palette.pillBg }]}>
-              <Ionicons name={icon} size={56} color={palette.primary} />
-              <Text style={[styles.previewPlaceholderText, { color: palette.muted }]}>
-                Preview unavailable in demo mode
-              </Text>
-            </View>
+            {imageUri ? (
+              <Image
+                source={{ uri: imageUri }}
+                style={[styles.previewImageArea, { backgroundColor: palette.pillBg }]}
+                resizeMode="contain"
+              />
+            ) : (
+              <View style={[styles.previewImageArea, { backgroundColor: palette.pillBg }]}>
+                <Ionicons name={icon} size={56} color={palette.primary} />
+                <Text style={[styles.previewPlaceholderText, { color: palette.muted }]}>
+                  Not uploaded yet
+                </Text>
+              </View>
+            )}
           </Animated.View>
         </View>
       </BlurView>
@@ -627,6 +635,116 @@ function BottomNav({
 }
 
 /* ============================================================
+   SKELETON LOADER
+   ------------------------------------------------------------
+   Shown while GET /driver/me is in flight, instead of a spinner.
+   Mirrors the real layout (profile card + section cards) so the
+   real content doesn't "jump" into a completely different shape
+   once it arrives — only the placeholder blocks are replaced.
+============================================================ */
+function SkeletonBlock({
+  palette,
+  width,
+  height,
+  radius = 8,
+  style,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  width: number | `${number}%`;
+  height: number;
+  radius?: number;
+  style?: any;
+}) {
+  const opacity = useSharedValue(0.5);
+
+  useEffect(() => {
+    opacity.value = withRepeat(withTiming(1, { duration: 700, easing: Easing.inOut(Easing.ease) }), -1, true);
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+  return (
+    <Animated.View
+      style={[
+        { width, height, borderRadius: radius, backgroundColor: palette.pillBg },
+        animatedStyle,
+        style,
+      ]}
+    />
+  );
+}
+
+function SkeletonSectionCard({
+  palette,
+  rows = 4,
+}: {
+  palette: ReturnType<typeof getPalette>;
+  rows?: number;
+}) {
+  return (
+    <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+      <SkeletonBlock palette={palette} width={140} height={16} radius={6} style={{ marginBottom: 16 }} />
+      {Array.from({ length: rows }).map((_, i) => (
+        <View
+          key={i}
+          style={[
+            styles.infoRow,
+            i !== rows - 1 && { borderBottomWidth: 1, borderBottomColor: palette.border },
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <SkeletonBlock palette={palette} width={90} height={10} radius={4} style={{ marginBottom: 7 }} />
+            <SkeletonBlock palette={palette} width="60%" height={13} radius={4} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function AccountScreenSkeleton({ palette }: { palette: ReturnType<typeof getPalette> }) {
+  return (
+    <Animated.View entering={FadeIn.duration(200)}>
+      {/* Profile card skeleton */}
+      <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+        <SkeletonBlock palette={palette} width={92} height={92} radius={46} style={{ marginBottom: 14 }} />
+        <SkeletonBlock palette={palette} width={150} height={18} radius={6} style={{ marginBottom: 10 }} />
+        <SkeletonBlock palette={palette} width={110} height={12} radius={5} style={{ marginBottom: 14 }} />
+        <SkeletonBlock palette={palette} width={90} height={22} radius={10} />
+        <View style={[styles.profileStatsRow, { marginTop: 20 }]}>
+          <View style={styles.profileStatItem}>
+            <SkeletonBlock palette={palette} width={30} height={17} radius={5} style={{ marginBottom: 6 }} />
+            <SkeletonBlock palette={palette} width={40} height={10} radius={4} />
+          </View>
+          <View style={[styles.profileStatDivider, { backgroundColor: palette.border }]} />
+          <View style={styles.profileStatItem}>
+            <SkeletonBlock palette={palette} width={30} height={17} radius={5} style={{ marginBottom: 6 }} />
+            <SkeletonBlock palette={palette} width={60} height={10} radius={4} />
+          </View>
+        </View>
+      </View>
+
+      {/* Personal Information skeleton */}
+      <SkeletonSectionCard palette={palette} rows={5} />
+
+      {/* License Information skeleton */}
+      <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+        <SkeletonBlock palette={palette} width={150} height={16} radius={6} style={{ marginBottom: 16 }} />
+        <SkeletonBlock palette={palette} width="100%" height={120} radius={18} />
+      </View>
+
+      {/* Vehicle Information skeleton */}
+      <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+        <SkeletonBlock palette={palette} width={150} height={16} radius={6} style={{ marginBottom: 16 }} />
+        <SkeletonBlock palette={palette} width="100%" height={140} radius={16} style={{ marginBottom: 12 }} />
+        <SkeletonBlock palette={palette} width="100%" height={13} radius={4} style={{ marginBottom: 10 }} />
+        <SkeletonBlock palette={palette} width="70%" height={13} radius={4} />
+      </View>
+    </Animated.View>
+  );
+}
+
+/* ============================================================
    MAIN ACCOUNT SCREEN
 ============================================================ */
 export default function DriverAccountScreen() {
@@ -678,8 +796,34 @@ export default function DriverAccountScreen() {
   const [announcements, setAnnouncements] = useState(true);
   const [emergencyAlerts, setEmergencyAlerts] = useState(true);
 
+  /* Driver / profile / vehicle data — from GET /driver/profile */
+  const [data, setData] = useState<DriverAccountData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadDriverProfile = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const response = await apiFetch<DriverAccountData>("/driver/me");
+      setData(response);
+    } catch (err) {
+      setLoadError(err instanceof ApiError ? err.message : "Could not load your profile. Check your connection.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // useFocusEffect (not just useEffect) so returning to this tab after an
+  // admin updates the driver's profile or vehicle assignment elsewhere
+  // shows the fresh data, same pattern already used in settings.tsx.
+  useFocusEffect(
+    useCallback(() => {
+      loadDriverProfile();
+    }, [loadDriverProfile])
+  );
+
   /* Preview modal */
-  const [preview, setPreview] = useState<{ title: string; icon: keyof typeof Ionicons.glyphMap } | null>(null);
+  const [preview, setPreview] = useState<{ title: string; icon: keyof typeof Ionicons.glyphMap; imageUri: string | null } | null>(null);
 
   /* Sign out */
   const [signOutVisible, setSignOutVisible] = useState(false);
@@ -722,7 +866,57 @@ export default function DriverAccountScreen() {
   }, []);
   const handleOpenProfile = useCallback(() => {}, []);
 
-  const workStatusColor = statusColorFor(DRIVER.onlineStatus, palette);
+  const personal = data?.personal ?? null;
+  const license = data?.license ?? null;
+  const vehicle = data?.vehicle ?? null;
+  const work = data?.work ?? null;
+
+  const workStatusColor = statusColorFor(data?.onlineStatus ?? "Off Duty", palette);
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
+        <DashboardHeader
+          palette={palette}
+          themeMode={themeMode}
+          onCycleTheme={handleCycleTheme}
+          onOpenNotifications={handleOpenNotifications}
+          onOpenProfile={handleOpenProfile}
+          driverName=""
+          profilePicture={null}
+        />
+        <TopTabsBar palette={palette} onNavigate={handleTopTabNavigate} />
+        <ScrollView
+          style={{ flex: 1, backgroundColor: palette.background }}
+          contentContainerStyle={[styles.scrollContent, { paddingHorizontal: isWideScreen ? 32 : 16 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <SkeletonBlock palette={palette} width={110} height={24} radius={6} style={{ marginTop: 6, marginBottom: 8 }} />
+          <SkeletonBlock palette={palette} width="80%" height={13} radius={4} style={{ marginBottom: 20 }} />
+          <AccountScreenSkeleton palette={palette} />
+        </ScrollView>
+        <BottomNav palette={palette} activeKey="account" onNavigate={handleBottomNavNavigate} />
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError || !data) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background, alignItems: "center", justifyContent: "center", padding: 24 }]}>
+        <Ionicons name="cloud-offline-outline" size={40} color={palette.muted} />
+        <Text style={{ color: palette.text, fontSize: 15, fontWeight: "700", marginTop: 14, textAlign: "center" }}>
+          {loadError ?? "Something went wrong loading your profile."}
+        </Text>
+        <Pressable
+          onPress={loadDriverProfile}
+          style={[styles.smallOutlineButton, { borderColor: palette.border, marginTop: 18, paddingHorizontal: 24 }]}
+        >
+          <Ionicons name="refresh-outline" size={15} color={palette.text} />
+          <Text style={[styles.smallOutlineButtonText, { color: palette.text }]}>Try Again</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
@@ -733,6 +927,8 @@ export default function DriverAccountScreen() {
           onCycleTheme={handleCycleTheme}
           onOpenNotifications={handleOpenNotifications}
           onOpenProfile={handleOpenProfile}
+          driverName={data.name}
+          profilePicture={data.profilePicture}
         />
 
         <TopTabsBar palette={palette} onNavigate={handleTopTabNavigate} />
@@ -753,78 +949,79 @@ export default function DriverAccountScreen() {
               entering={FadeInDown.duration(450)}
               style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}
             >
-              <Pressable onPress={() => setPreview({ title: "Profile Picture", icon: "person-outline" })}>
-                {DRIVER.profilePicture ? (
-                  <Image source={{ uri: DRIVER.profilePicture }} style={styles.profileAvatarImage} />
+              <Pressable onPress={() => setPreview({ title: "Profile Picture", icon: "person-outline", imageUri: data.profilePicture })}>
+                {data.profilePicture ? (
+                  <Image source={{ uri: data.profilePicture }} style={styles.profileAvatarImage} />
                 ) : (
                   <View style={[styles.profileAvatarFallback, { backgroundColor: palette.primary }]}>
-                    <Text style={styles.profileAvatarFallbackText}>{DRIVER.name.charAt(0)}</Text>
+                    <Text style={styles.profileAvatarFallbackText}>{data.name.charAt(0)}</Text>
                   </View>
                 )}
               </Pressable>
 
-              <Text style={[styles.profileName, { color: palette.text }]}>{DRIVER.name}</Text>
+              <Text style={[styles.profileName, { color: palette.text }]}>{data.name}</Text>
               <View style={styles.profileIdRow}>
                 <Text style={[styles.profileIdText, { color: palette.muted }]}>
-                  {DRIVER.employeeId} · {DRIVER.driverId}
+                  {val(data.employeeId)} · {data.driverId}
                 </Text>
               </View>
 
               <View style={[styles.onlineBadge, { backgroundColor: workStatusColor + "1A" }]}>
                 <View style={[styles.onlineDot, { backgroundColor: workStatusColor }]} />
-                <Text style={[styles.onlineBadgeText, { color: workStatusColor }]}>{DRIVER.onlineStatus}</Text>
+                <Text style={[styles.onlineBadgeText, { color: workStatusColor }]}>{data.onlineStatus}</Text>
               </View>
 
+              {/* No "rating" column exists anywhere, so this is a 2-column
+                  row (Years, Deliveries) rather than the original 3-column
+                  demo layout — both values are real, computed server-side. */}
               <View style={styles.profileStatsRow}>
                 <View style={styles.profileStatItem}>
-                  <Text style={[styles.profileStatValue, { color: palette.text }]}>{DRIVER.yearsWithKayora}</Text>
+                  <Text style={[styles.profileStatValue, { color: palette.text }]}>
+                    {data.yearsWithKayora ?? "—"}
+                  </Text>
                   <Text style={[styles.profileStatLabel, { color: palette.muted }]}>Years</Text>
                 </View>
                 <View style={[styles.profileStatDivider, { backgroundColor: palette.border }]} />
                 <View style={styles.profileStatItem}>
-                  <Text style={[styles.profileStatValue, { color: palette.text }]}>★ {DRIVER.rating}</Text>
-                  <Text style={[styles.profileStatLabel, { color: palette.muted }]}>Rating</Text>
-                </View>
-                <View style={[styles.profileStatDivider, { backgroundColor: palette.border }]} />
-                <View style={styles.profileStatItem}>
-                  <Text style={[styles.profileStatValue, { color: palette.text }]}>{DRIVER.completedDeliveries}</Text>
+                  <Text style={[styles.profileStatValue, { color: palette.text }]}>{data.completedDeliveries}</Text>
                   <Text style={[styles.profileStatLabel, { color: palette.muted }]}>Deliveries</Text>
                 </View>
               </View>
 
-              <View style={[styles.assignmentPill, { backgroundColor: palette.pillBg }]}>
-                <Ionicons name="navigate-outline" size={14} color={palette.primary} />
-                <Text style={[styles.assignmentPillText, { color: palette.text }]} numberOfLines={1}>
-                  Current: {DRIVER.currentAssignment}
-                </Text>
-              </View>
+              {data.currentAssignment && (
+                <View style={[styles.assignmentPill, { backgroundColor: palette.pillBg }]}>
+                  <Ionicons name="navigate-outline" size={14} color={palette.primary} />
+                  <Text style={[styles.assignmentPillText, { color: palette.text }]} numberOfLines={1}>
+                    Current: {data.currentAssignment}
+                  </Text>
+                </View>
+              )}
 
-              <Pressable style={[styles.editProfileButton, { borderColor: palette.border }]}>
-                <Ionicons name="create-outline" size={15} color={palette.text} />
-                <Text style={[styles.editProfileButtonText, { color: palette.text }]}>Edit Profile</Text>
-              </Pressable>
+              
             </Animated.View>
 
             {/* ---------- SECTION 2: PERSONAL INFORMATION ---------- */}
             <SectionCard palette={palette} title="Personal Information" delay={60}>
-              <InfoRow label="Full Name" value={DRIVER.personal.fullName} palette={palette} />
-              <InfoRow label="Gender" value={DRIVER.personal.gender} palette={palette} />
-              <InfoRow label="Date of Birth" value={DRIVER.personal.dob} palette={palette} />
-              <InfoRow label="Marital Status" value={DRIVER.personal.maritalStatus} palette={palette} />
-              <InfoRow label="Nationality" value={DRIVER.personal.nationality} palette={palette} />
-              <InfoRow label="State of Origin" value={DRIVER.personal.stateOfOrigin} palette={palette} />
-              <InfoRow label="Residential Address" value={DRIVER.personal.residentialAddress} palette={palette} />
-              <InfoRow label="Phone Number" value={DRIVER.personal.phone} palette={palette} />
-              <InfoRow label="Email Address" value={DRIVER.personal.email} palette={palette} />
-              <InfoRow label="Emergency Contact Name" value={DRIVER.personal.emergencyContactName} palette={palette} />
-              <InfoRow label="Emergency Contact Phone" value={DRIVER.personal.emergencyContactPhone} palette={palette} />
-              <InfoRow label="Blood Group" value={DRIVER.personal.bloodGroup} palette={palette} />
-              <InfoRow label="Genotype" value={DRIVER.personal.genotype} palette={palette} />
-              <InfoRow label="National ID Number" value={DRIVER.personal.nationalId} palette={palette} />
-              <InfoRow label="Employment Date" value={DRIVER.personal.employmentDate} palette={palette} />
-              <InfoRow label="Department" value={DRIVER.personal.department} palette={palette} />
-              <InfoRow label="Branch" value={DRIVER.personal.branch} palette={palette} />
-              <InfoRow label="Supervisor" value={DRIVER.personal.supervisor} palette={palette} isLast />
+              <InfoRow label="Full Name" value={personal?.fullName ?? data.name} palette={palette} />
+              <InfoRow label="Gender" value={val(personal?.gender)} palette={palette} />
+              <InfoRow label="Date of Birth" value={val(personal?.dob)} palette={palette} />
+              <InfoRow label="Marital Status" value={val(personal?.maritalStatus)} palette={palette} />
+              {/* Labeled "State" not "State of Origin" — driver_profiles.state
+                  is a residence field (paired with home_address), not a
+                  dedicated state-of-origin column. See DriverAccountResource. */}
+              <InfoRow label="State" value={val(personal?.stateOfOrigin)} palette={palette} />
+              <InfoRow label="Home Address" value={val(personal?.residentialAddress)} palette={palette} />
+              <InfoRow label="Phone Number" value={val(personal?.phone)} palette={palette} />
+              <InfoRow label="Email Address" value={val(personal?.email)} palette={palette} />
+              <InfoRow label="Emergency Contact Name" value={val(personal?.emergencyContactName)} palette={palette} />
+              <InfoRow label="Emergency Contact Phone" value={val(personal?.emergencyContactPhone)} palette={palette} />
+              <InfoRow label="Blood Group" value={val(personal?.bloodGroup)} palette={palette} />
+              <InfoRow label="Genotype" value={val(personal?.genotype)} palette={palette} />
+              <InfoRow label="National ID Number" value={val(personal?.nationalId)} palette={palette} />
+              <InfoRow label="Employment Date" value={val(personal?.employmentDate)} palette={palette} />
+              <InfoRow label="Department" value={val(personal?.department)} palette={palette} />
+              <InfoRow label="Branch" value={val(personal?.branch)} palette={palette} />
+              <InfoRow label="Supervisor" value={val(personal?.supervisor)} palette={palette} isLast />
             </SectionCard>
 
             {/* ---------- SECTION 3: LICENSE INFORMATION ---------- */}
@@ -837,15 +1034,17 @@ export default function DriverAccountScreen() {
               <View style={[styles.licenseCard, { backgroundColor: palette.primary }]}>
                 <View style={styles.licenseTopRow}>
                   <View style={styles.licensePhotoWrap}>
-                    <Text style={styles.licensePhotoInitial}>{DRIVER.name.charAt(0)}</Text>
+                    <Text style={styles.licensePhotoInitial}>{data.name.charAt(0)}</Text>
                   </View>
                   <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.licenseName}>{DRIVER.name}</Text>
-                    <Text style={styles.licenseSubLabel}>{DRIVER.license.licenseClass} · {DRIVER.license.issuingAuthority}</Text>
+                    <Text style={styles.licenseName}>{data.name}</Text>
+                    <Text style={styles.licenseSubLabel}>{val(license?.number)}</Text>
                   </View>
-                  <View style={styles.licenseStatusBadge}>
-                    <Text style={styles.licenseStatusText}>{DRIVER.license.status}</Text>
-                  </View>
+                  {license?.status && (
+                    <View style={styles.licenseStatusBadge}>
+                      <Text style={styles.licenseStatusText}>{license.status}</Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.licenseDivider} />
@@ -853,21 +1052,17 @@ export default function DriverAccountScreen() {
                 <View style={styles.licenseGrid}>
                   <View style={styles.licenseGridItem}>
                     <Text style={styles.licenseGridLabel}>License Number</Text>
-                    <Text style={styles.licenseGridValue}>{DRIVER.license.number}</Text>
-                  </View>
-                  <View style={styles.licenseGridItem}>
-                    <Text style={styles.licenseGridLabel}>Issue Date</Text>
-                    <Text style={styles.licenseGridValue}>{DRIVER.license.issueDate}</Text>
+                    <Text style={styles.licenseGridValue}>{val(license?.number)}</Text>
                   </View>
                   <View style={styles.licenseGridItem}>
                     <Text style={styles.licenseGridLabel}>Expiry Date</Text>
-                    <Text style={styles.licenseGridValue}>{DRIVER.license.expiryDate}</Text>
+                    <Text style={styles.licenseGridValue}>{val(license?.expiryDate)}</Text>
                   </View>
                 </View>
               </View>
 
               <Pressable
-                onPress={() => setPreview({ title: "Driver License", icon: "card-outline" })}
+                onPress={() => setPreview({ title: "Driver License", icon: "card-outline", imageUri: license?.frontImage ?? null })}
                 style={[styles.smallOutlineButton, { borderColor: palette.border }]}
               >
                 <Ionicons name="expand-outline" size={15} color={palette.text} />
@@ -877,58 +1072,72 @@ export default function DriverAccountScreen() {
 
             {/* ---------- SECTION 4: VEHICLE INFORMATION ---------- */}
             <SectionCard palette={palette} title="Vehicle Information" delay={160}>
-              <Pressable
-                onPress={() => setPreview({ title: "Vehicle Photo", icon: "car-outline" })}
-                style={[styles.vehiclePreviewBox, { backgroundColor: palette.pillBg }]}
-              >
-                <Ionicons name="car-sport-outline" size={40} color={palette.primary} />
-                <Text style={[styles.vehiclePreviewText, { color: palette.muted }]}>
-                  {DRIVER.vehicle.brand} {DRIVER.vehicle.model}
-                </Text>
-              </Pressable>
+              {vehicle ? (
+                <>
+                  <Pressable
+                    onPress={() => setPreview({ title: "Vehicle Photo", icon: "car-outline", imageUri: vehicle.image })}
+                    style={[styles.vehiclePreviewBox, { backgroundColor: palette.pillBg }]}
+                  >
+                    {vehicle.image ? (
+                      <Image source={{ uri: vehicle.image }} style={{ width: "100%", height: "100%", borderRadius: 16 }} />
+                    ) : (
+                      <>
+                        <Ionicons name="car-sport-outline" size={40} color={palette.primary} />
+                        <Text style={[styles.vehiclePreviewText, { color: palette.muted }]}>
+                          {vehicle.brand} {vehicle.model}
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
 
-              <InfoRow label="Vehicle Type" value={DRIVER.vehicle.type} palette={palette} />
-              <InfoRow label="Vehicle Brand" value={DRIVER.vehicle.brand} palette={palette} />
-              <InfoRow label="Vehicle Model" value={DRIVER.vehicle.model} palette={palette} />
-              <InfoRow label="Vehicle Color" value={DRIVER.vehicle.color} palette={palette} />
-              <InfoRow label="Vehicle Plate Number" value={DRIVER.vehicle.plateNumber} palette={palette} />
-              <InfoRow label="Engine Number" value={DRIVER.vehicle.engineNumber} palette={palette} />
-              <InfoRow label="Chassis Number" value={DRIVER.vehicle.chassisNumber} palette={palette} />
-              <InfoRow label="Fuel Type" value={DRIVER.vehicle.fuelType} palette={palette} />
-              <InfoRow label="Insurance Status" value={DRIVER.vehicle.insuranceStatus} palette={palette} />
-              <InfoRow label="Insurance Expiry" value={DRIVER.vehicle.insuranceExpiry} palette={palette} />
-              <InfoRow label="Vehicle License Number" value={DRIVER.vehicle.vehicleLicenseNumber} palette={palette} />
-              <InfoRow label="Registration Date" value={DRIVER.vehicle.registrationDate} palette={palette} />
-              <InfoRow label="Road Worthiness Expiry" value={DRIVER.vehicle.roadWorthinessExpiry} palette={palette} />
-              <InfoRow label="Assigned Depot" value={DRIVER.vehicle.assignedDepot} palette={palette} />
-              <InfoRow label="Current Mileage" value={DRIVER.vehicle.currentMileage} palette={palette} isLast />
+                  <InfoRow label="Vehicle Type" value={vehicle.type} palette={palette} />
+                  <InfoRow label="Vehicle Brand" value={vehicle.brand} palette={palette} />
+                  <InfoRow label="Vehicle Model" value={vehicle.model} palette={palette} />
+                  <InfoRow label="Vehicle Color" value={val(vehicle.color)} palette={palette} />
+                  <InfoRow label="Vehicle Plate Number" value={vehicle.plateNumber} palette={palette} />
+                  <InfoRow label="Engine Number" value={val(vehicle.engineNumber)} palette={palette} />
+                  <InfoRow label="Chassis Number" value={val(vehicle.chassisNumber)} palette={palette} />
+                  <InfoRow label="Assignment Status" value={vehicle.status} palette={palette} isLast />
 
-              <View style={styles.taskButtonsRow}>
-                <Pressable
-                  onPress={() => setPreview({ title: "Vehicle Photo", icon: "car-outline" })}
-                  style={[styles.smallOutlineButton, { flex: 1, borderColor: palette.border }]}
-                >
-                  <Ionicons name="image-outline" size={15} color={palette.text} />
-                  <Text style={[styles.smallOutlineButtonText, { color: palette.text }]}>Vehicle Photo</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setPreview({ title: "Vehicle License", icon: "document-text-outline" })}
-                  style={[styles.smallOutlineButton, { flex: 1, borderColor: palette.border }]}
-                >
-                  <Ionicons name="document-text-outline" size={15} color={palette.text} />
-                  <Text style={[styles.smallOutlineButtonText, { color: palette.text }]}>Vehicle License</Text>
-                </Pressable>
-              </View>
+                  <View style={styles.taskButtonsRow}>
+                    <Pressable
+                      onPress={() => setPreview({ title: "Vehicle Photo", icon: "car-outline", imageUri: vehicle.image })}
+                      style={[styles.smallOutlineButton, { flex: 1, borderColor: palette.border }]}
+                    >
+                      <Ionicons name="image-outline" size={15} color={palette.text} />
+                      <Text style={[styles.smallOutlineButtonText, { color: palette.text }]}>Vehicle Photo</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setPreview({ title: "Vehicle Registration", icon: "document-text-outline", imageUri: vehicle.registrationImage })}
+                      style={[styles.smallOutlineButton, { flex: 1, borderColor: palette.border }]}
+                    >
+                      <Ionicons name="document-text-outline" size={15} color={palette.text} />
+                      <Text style={[styles.smallOutlineButtonText, { color: palette.text }]}>Registration Doc</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : (
+                <View style={{ alignItems: "center", paddingVertical: 20 }}>
+                  <Ionicons name="car-outline" size={32} color={palette.muted} />
+                  <Text style={{ color: palette.muted, fontSize: 13, marginTop: 10, textAlign: "center" }}>
+                    No vehicle currently assigned. Your admin will assign one from the fleet.
+                  </Text>
+                </View>
+              )}
             </SectionCard>
 
             {/* ---------- SECTION 5: DOCUMENTS ---------- */}
-            <SectionCard palette={palette} title="Documents" subtitle="Compliance and verification status" delay={200}>
-              {DOCUMENTS.map((doc, index) => (
+            <SectionCard palette={palette} title="Documents" subtitle="Uploaded by your admin" delay={200}>
+              {[
+                { key: "license_front", title: "License (Front)", icon: "card-outline" as const, url: license?.frontImage ?? null },
+                { key: "license_back", title: "License (Back)", icon: "card-outline" as const, url: license?.backImage ?? null },
+                { key: "national_id", title: "National ID", icon: "id-card-outline" as const, url: license?.nationalIdImage ?? null },
+              ].map((doc, index, arr) => (
                 <View
                   key={doc.key}
                   style={[
                     styles.documentRow,
-                    index !== DOCUMENTS.length - 1 && { borderBottomWidth: 1, borderBottomColor: palette.border },
+                    index !== arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: palette.border },
                   ]}
                 >
                   <View style={[styles.helpIconWrap, { backgroundColor: palette.pillBg }]}>
@@ -939,25 +1148,27 @@ export default function DriverAccountScreen() {
                     <View
                       style={[
                         styles.documentStatusBadge,
-                        { backgroundColor: (doc.verified ? palette.success : palette.warning) + "1A" },
+                        { backgroundColor: (doc.url ? palette.success : palette.warning) + "1A" },
                       ]}
                     >
                       <Text
                         style={[
                           styles.documentStatusText,
-                          { color: doc.verified ? palette.success : palette.warning },
+                          { color: doc.url ? palette.success : palette.warning },
                         ]}
                       >
-                        {doc.verified ? "Verified" : "Pending"}
+                        {doc.url ? "Uploaded" : "Not Uploaded"}
                       </Text>
                     </View>
                   </View>
-                  <Pressable
-                    onPress={() => setPreview({ title: doc.title, icon: doc.icon })}
-                    style={[styles.previewSmallButton, { borderColor: palette.border }]}
-                  >
-                    <Text style={[styles.previewSmallButtonText, { color: palette.text }]}>Preview</Text>
-                  </Pressable>
+                  {doc.url && (
+                    <Pressable
+                      onPress={() => setPreview({ title: doc.title, icon: doc.icon, imageUri: doc.url })}
+                      style={[styles.previewSmallButton, { borderColor: palette.border }]}
+                    >
+                      <Text style={[styles.previewSmallButtonText, { color: palette.text }]}>Preview</Text>
+                    </Pressable>
+                  )}
                 </View>
               ))}
             </SectionCard>
@@ -1004,28 +1215,28 @@ export default function DriverAccountScreen() {
             <SectionCard palette={palette} title="Work Information" delay={320}>
               <View style={styles.workStatsGrid}>
                 <View style={[styles.workStatCard, { backgroundColor: palette.pillBg }]}>
-                  <Text style={[styles.workStatValue, { color: palette.text }]}>{DRIVER.work.todaysTasks}</Text>
+                  <Text style={[styles.workStatValue, { color: palette.text }]}>{work?.todaysTasks ?? 0}</Text>
                   <Text style={[styles.workStatLabel, { color: palette.muted }]}>Today's Tasks</Text>
                 </View>
                 <View style={[styles.workStatCard, { backgroundColor: palette.pillBg }]}>
-                  <Text style={[styles.workStatValue, { color: palette.text }]}>{DRIVER.work.completedToday}</Text>
+                  <Text style={[styles.workStatValue, { color: palette.text }]}>{work?.completedToday ?? 0}</Text>
                   <Text style={[styles.workStatLabel, { color: palette.muted }]}>Completed Today</Text>
                 </View>
                 <View style={[styles.workStatCard, { backgroundColor: palette.pillBg }]}>
-                  <Text style={[styles.workStatValue, { color: palette.text }]}>{DRIVER.work.pendingTasks}</Text>
+                  <Text style={[styles.workStatValue, { color: palette.text }]}>{work?.pendingTasks ?? 0}</Text>
                   <Text style={[styles.workStatLabel, { color: palette.muted }]}>Pending Tasks</Text>
                 </View>
               </View>
 
-              <InfoRow label="Current Shift" value={DRIVER.work.currentShift} palette={palette} />
-              <InfoRow label="Working Hours" value={DRIVER.work.workingHours} palette={palette} />
-              <InfoRow label="Depot" value={DRIVER.work.depot} palette={palette} />
-              <InfoRow label="Supervisor" value={DRIVER.work.supervisor} palette={palette} isLast />
+              {/* Current Shift / Working Hours still have no backing column
+                  anywhere — dropped rather than faked. */}
+              <InfoRow label="Depot" value={val(work?.depot)} palette={palette} />
+              <InfoRow label="Supervisor" value={val(work?.supervisor)} palette={palette} isLast />
 
               <View style={[styles.onlineBadge, { backgroundColor: workStatusColor + "1A", marginTop: 14 }]}>
                 <View style={[styles.onlineDot, { backgroundColor: workStatusColor }]} />
                 <Text style={[styles.onlineBadgeText, { color: workStatusColor }]}>
-                  Employment Status: {DRIVER.onlineStatus}
+                  Employment Status: {data.onlineStatus}
                 </Text>
               </View>
             </SectionCard>
@@ -1097,6 +1308,7 @@ export default function DriverAccountScreen() {
         palette={palette}
         title={preview?.title ?? ""}
         icon={preview?.icon ?? "image-outline"}
+        imageUri={preview?.imageUri ?? null}
         onClose={() => setPreview(null)}
       />
 
@@ -1291,7 +1503,7 @@ const styles = StyleSheet.create({
 
   /* Confirm Dialog */
   confirmOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15,23,42,0.5)",
     alignItems: "center",
     justifyContent: "center",

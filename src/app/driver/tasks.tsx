@@ -139,6 +139,11 @@ interface DisplayTask {
   paymentMethod: string;
   priority: TaskPriority;
   status: TaskStatus;
+  // True when this is an ASAP order the driver hasn't accepted/declined
+  // yet — raw backend status is still 'Assigned' (set directly by the
+  // customer's driver-picker at checkout, no offer/broadcast step).
+  // Scheduled (non-ASAP) orders are pre-arranged, so they never need this.
+  needsResponse: boolean;
   deliveryTime: string;
   notes?: string;
   assignedAt?: string;
@@ -168,6 +173,8 @@ function mapOrderToTaskDisplay(order: DriverOrder): DisplayTask {
   const status: TaskStatus =
     order.status === "Delivered" ? "Completed" : order.status === "Out For Delivery" ? "In Progress" : "Scheduled";
 
+  const isAsap = order.priority === "Urgent";
+
   return {
     id: order.orderNumber,
     apiId: order.id,
@@ -182,6 +189,7 @@ function mapOrderToTaskDisplay(order: DriverOrder): DisplayTask {
     paymentMethod: order.paymentMethod ?? "—",
     priority: priorityMap[order.priority] ?? "Medium",
     status,
+    needsResponse: isAsap && order.status === "Assigned",
     deliveryTime: order.eta ?? "—",
     notes: order.specialInstructions ?? undefined,
     assignedAt: formatTimeLabel(order.assignedAt),
@@ -457,10 +465,14 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
   task,
   palette,
   onMoreDetails,
+  onAccept,
+  onDecline,
 }: {
   task: DisplayTask;
   palette: ReturnType<typeof getPalette>;
   onMoreDetails: (task: DisplayTask) => void;
+  onAccept: (task: DisplayTask) => void;
+  onDecline: (task: DisplayTask) => void;
 }) {
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -471,6 +483,13 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
       entering={FadeInDown.duration(400)}
       style={[styles.taskCard, { backgroundColor: palette.card, borderColor: palette.border }, animatedStyle]}
     >
+      {task.needsResponse && (
+        <View style={[styles.asapBadge, { backgroundColor: palette.danger }]}>
+          <Ionicons name="flash" size={12} color="#FFFFFF" />
+          <Text style={styles.asapBadgeText}>ASAP — AWAITING YOUR RESPONSE</Text>
+        </View>
+      )}
+
       <View style={styles.taskTopRow}>
         <View style={styles.taskCustomerRow}>
           {task.customerPicture ? (
@@ -527,15 +546,34 @@ const ScheduledTaskCard = memo(function ScheduledTaskCard({
         </View>
       </View>
 
-      <Pressable
-        onPressIn={() => (scale.value = withTiming(0.97, { duration: 100 }))}
-        onPressOut={() => (scale.value = withSpring(1, { damping: 12 }))}
-        onPress={() => onMoreDetails(task)}
-        style={[styles.moreDetailsButton, { backgroundColor: palette.primary }]}
-      >
-        <Text style={styles.moreDetailsButtonText}>More Details</Text>
-        <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
-      </Pressable>
+      {task.needsResponse ? (
+        <View style={styles.taskButtonsRow}>
+          <Pressable
+            onPressIn={() => (scale.value = withTiming(0.97, { duration: 100 }))}
+            onPressOut={() => (scale.value = withSpring(1, { damping: 12 }))}
+            onPress={() => onAccept(task)}
+            style={[styles.taskButtonPrimary, { backgroundColor: palette.primary, flex: 1 }]}
+          >
+            <Text style={styles.taskButtonPrimaryText}>Accept</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => onDecline(task)}
+            style={[styles.ghostButton, { borderColor: palette.border, flex: 1 }]}
+          >
+            <Text style={[styles.ghostButtonText, { color: palette.danger }]}>Decline</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          onPressIn={() => (scale.value = withTiming(0.97, { duration: 100 }))}
+          onPressOut={() => (scale.value = withSpring(1, { damping: 12 }))}
+          onPress={() => onMoreDetails(task)}
+          style={[styles.moreDetailsButton, { backgroundColor: palette.primary }]}
+        >
+          <Text style={styles.moreDetailsButtonText}>More Details</Text>
+          <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+        </Pressable>
+      )}
     </Animated.View>
   );
 });
@@ -1061,6 +1099,34 @@ export default function DriverTasksScreen() {
 
   const handleConfirmNo = useCallback(() => setConfirmTask(null), []);
 
+  const handleAcceptTask = useCallback(
+    async (task: DisplayTask) => {
+      try {
+        await DriverOrdersService.acceptOrder(task.apiId);
+        showSuccess("Delivery Accepted");
+        await loadTasks();
+      } catch (e) {
+        showToast("Could not accept this order — it may have already been taken.");
+        await loadTasks();
+      }
+    },
+    [loadTasks]
+  );
+
+  const handleDeclineTask = useCallback(
+    async (task: DisplayTask) => {
+      try {
+        await DriverOrdersService.declineOrder(task.apiId);
+        showToast(`Order ${task.orderId} declined`);
+        await loadTasks();
+      } catch (e) {
+        showToast("Could not decline this order. Please try again.");
+        await loadTasks();
+      }
+    },
+    [loadTasks]
+  );
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "left", "right"]}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -1149,7 +1215,13 @@ export default function DriverTasksScreen() {
                 keyExtractor={(item) => item.id}
                 scrollEnabled={false}
                 renderItem={({ item }) => (
-                  <ScheduledTaskCard task={item} palette={palette} onMoreDetails={handleMoreDetails} />
+                  <ScheduledTaskCard
+                    task={item}
+                    palette={palette}
+                    onMoreDetails={handleMoreDetails}
+                    onAccept={handleAcceptTask}
+                    onDecline={handleDeclineTask}
+                  />
                 )}
                 ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
               />
@@ -1263,6 +1335,17 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 17, fontWeight: "800" },
 
   /* Scheduled Task Card */
+  asapBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  asapBadgeText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800", letterSpacing: 0.3 },
   taskCard: { borderWidth: 1, borderRadius: 20, padding: 16 },
   taskTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   taskCustomerRow: { flexDirection: "row", alignItems: "center", flex: 1 },
