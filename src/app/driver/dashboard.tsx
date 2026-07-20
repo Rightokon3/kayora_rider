@@ -310,11 +310,6 @@ function WorkStatusCard({ palette }: { palette: ReturnType<typeof getPalette> })
     return hour >= 7 && hour < 17;
   });
 
-  // Push the computed status to the backend whenever it changes — this is
-  // what makes it visible to the admin as a real DB value instead of each
-  // app silently guessing. Fires once on mount too, so the DB reflects
-  // reality immediately after login rather than waiting for the next hour
-  // boundary to cross.
   useEffect(() => {
     DriverDashboardService.updateDutyStatus(isAvailable ? "on_duty" : "off_duty").catch(() => {
       // Non-fatal — the UI's own automatic calculation still works locally
@@ -497,6 +492,29 @@ const TaskCard = memo(function TaskCard({
     </Animated.View>
   );
 });
+
+/* ============================================================
+   EMPTY TASKS STATE
+============================================================ */
+function EmptyTasksState({ palette }: { palette: ReturnType<typeof getPalette> }) {
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(400)}
+      style={[
+        styles.emptyState,
+        { backgroundColor: palette.card, borderColor: palette.border },
+      ]}
+    >
+      <View style={[styles.emptyIconWrap, { backgroundColor: palette.primary + "1A" }]}>
+        <Ionicons name="checkbox-outline" size={30} color={palette.primary} />
+      </View>
+      <Text style={[styles.emptyTitle, { color: palette.text }]}>All caught up</Text>
+      <Text style={[styles.emptySubtitle, { color: palette.muted }]}>
+        No active deliveries assigned right now.
+      </Text>
+    </Animated.View>
+  );
+}
 
 /* ============================================================
    QUICK STATS
@@ -707,8 +725,6 @@ export default function DriverDashboardScreen() {
 
   const handleNavigateToTask = useCallback(
     (task: DisplayTask) => {
-      // Opens the in-app map showing all of today's stops, focused/popup-
-      // opened on this one, instead of an external maps app.
       router.push(`/driver/maps?focusId=${task.id}` as any);
     },
     [router]
@@ -745,13 +761,7 @@ export default function DriverDashboardScreen() {
     loadDashboardData();
   }, [loadDashboardData]);
 
-  /* ---------- Real-time distance tracking (Haversine, server-side) ----------
-     While the driver is on duty (same 7AM-5PM window WorkStatusCard uses),
-     ping the current GPS position to the backend every 15s. The backend
-     computes the Haversine distance from the last stored point and
-     accumulates it into today's total; the returned running total updates
-     the Quick Stats card immediately, without waiting for a full stats
-     refetch. Off duty, no pings are sent and no distance accrues. */
+  /* ---------- Real-time distance tracking (Haversine, server-side) ---------- */
   const isOnDuty = useMemo(() => {
     const hour = new Date().getHours();
     return hour >= 7 && hour < 17;
@@ -780,7 +790,7 @@ export default function DriverDashboardScreen() {
       }
     };
 
-    pingLocation(); // first ping immediately, then every 15s
+    pingLocation();
     const interval = setInterval(pingLocation, 15000);
 
     return () => {
@@ -841,9 +851,7 @@ export default function DriverDashboardScreen() {
               tasksLoading ? (
                 <ActivityIndicator color={palette.primary} style={{ marginVertical: 20 }} />
               ) : (
-                <Text style={{ color: palette.muted, fontSize: 13, paddingVertical: 20 }}>
-                  No active deliveries assigned right now.
-                </Text>
+                <EmptyTasksState palette={palette} />
               )
             }
           />
@@ -1177,6 +1185,33 @@ const styles = StyleSheet.create({
   taskButtonSecondaryText: {
     fontSize: 13.5,
     fontWeight: "700",
+  },
+
+  /* Empty Tasks State */
+  emptyState: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+  },
+  emptyIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    textAlign: "center",
   },
 
   /* Quick Stats */
