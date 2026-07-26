@@ -2,7 +2,7 @@ import * as SecureStore from "expo-secure-store";
 
 // Replace with your local machine IP or production URL — same base your
 // other driver services (driverDashboard.ts, driverOrders.ts) already use.
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "https://kayorabackend-production.up.railway.app";
 
 // Matches the key your login flow already writes the Sanctum token to
 // (see the auth fix from earlier — always written on login, independent

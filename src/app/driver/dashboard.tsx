@@ -18,9 +18,10 @@ import {
   ActivityIndicator,
   Platform,
   useWindowDimensions,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";
@@ -757,8 +758,27 @@ export default function DriverDashboardScreen() {
     }
   }, []);
 
+  // Runs once on mount so the screen isn't blank while waiting for focus.
   useEffect(() => {
     loadDashboardData();
+  }, [loadDashboardData]);
+
+  // Re-runs every time the Dashboard tab gains focus — this is what makes a
+  // newly assigned task or a delivery you just completed on another screen
+  // actually show up here. Without this, the tab stays mounted in the
+  // background and the data from the very first load never gets refreshed.
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData])
+  );
+
+  /* ---------- Pull-to-refresh ---------- */
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadDashboardData();
+    setRefreshing(false);
   }, [loadDashboardData]);
 
   /* ---------- Real-time distance tracking (Haversine, server-side) ---------- */
@@ -821,6 +841,14 @@ export default function DriverDashboardScreen() {
           { paddingHorizontal: isWideScreen ? 32 : 16 },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={palette.primary}
+            colors={[palette.primary]}
+          />
+        }
       >
         <Animated.View style={contentEntrance}>
           <WorkStatusCard palette={palette} />

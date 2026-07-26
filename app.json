@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "kayora Driver",
-    "slug": "kayora Driver",
+    "slug": "kayora_Driver",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/kayora-logo.png",
@@ -42,6 +42,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e2d23c60-c7c3-429a-8cf5-694c337743ff"
+      }
     }
   }
 }

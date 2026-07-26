@@ -1,6 +1,6 @@
-import { Platform } from "react-native";
-import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 
 /* ============================================================
    API CLIENT
@@ -47,7 +47,9 @@ const storage = {
   },
 };
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000/api";
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  "https://kayorabackend-production.up.railway.app/api";
 
 const TOKEN_KEY = "kayora_driver_token";
 const TOKEN_EXPIRY_KEY = "kayora_driver_token_expiry";
@@ -70,7 +72,6 @@ export async function clearSession() {
   await storage.removeItem(TOKEN_EXPIRY_KEY);
 }
 
-
 export async function hasValidSession(): Promise<boolean> {
   const token = await storage.getItem(TOKEN_KEY);
   const expiry = await storage.getItem(TOKEN_EXPIRY_KEY);
@@ -78,7 +79,10 @@ export async function hasValidSession(): Promise<boolean> {
   return new Date(expiry).getTime() > Date.now();
 }
 
-export async function apiFetch<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T = any>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
   const token = await storage.getItem(TOKEN_KEY);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {

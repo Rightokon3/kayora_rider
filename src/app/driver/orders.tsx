@@ -42,9 +42,6 @@ import { DriverOrdersService } from "../../services/driverOrders";
 import { DriverOrder } from "../../types/driverOrder";
 import TrackingMap from "../../components/TrackingMap";
 
-/* ============================================================
-   BRAND COLORS
-============================================================ */
 const BRAND = {
   primary: "#0D4A8C",
   secondary: "#1E5FAF",
@@ -93,9 +90,6 @@ function getPalette(scheme: Scheme) {
 const THEME_STORAGE_KEY = "kayora_driver_theme_mode";
 const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
 
-/* ============================================================
-   TOP / BOTTOM NAV CONFIG
-============================================================ */
 const TOP_TABS = [
   { key: "orders", label: "My Orders", route: "/driver/orders" as const },
   { key: "tasks", label: "My Tasks", route: "/driver/tasks" as const },
@@ -109,9 +103,6 @@ const BOTTOM_TABS = [
   { key: "account", label: "Account", icon: "person-outline", route: "/driver/account" as const },
 ];
 
-/* ============================================================
-   DISPLAY MODEL
-============================================================ */
 type DisplayStatus = "Pending" | "Active" | "Completed";
 type DisplaySubStatus = "Assigned" | "In Progress" | "Completed";
 
@@ -195,16 +186,7 @@ function mapOrderToDisplay(order: DriverOrder): DisplayOrder {
     price: order.amount,
     paymentMethod: order.paymentMethod ?? "—",
     isAsap,
-    isAsapOffer:
-      isAsap &&
-      // Covers TWO cases: (1) the legacy broadcast system, where a driver
-      // is specifically offered a pending order (order.offeredToMe), and
-      // (2) the new flow, where the customer picks the driver directly at
-      // checkout — the order lands with driver_id already set and
-      // status:'Assigned', with no offer step at all. Either way, if the
-      // raw status is still 'Assigned', the driver hasn't accepted or
-      // declined yet, so Accept/Decline should show.
-      (order.offeredToMe || order.status === "Assigned"),
+    isAsapOffer: isAsap && (order.offeredToMe || order.status === "Assigned"),
     distanceKm: order.distanceKm ?? 0,
     eta: order.eta ?? "—",
     createdAt: formatTimeLabel(order.createdAt) ?? "—",
@@ -215,25 +197,16 @@ function mapOrderToDisplay(order: DriverOrder): DisplayOrder {
   };
 }
 
-/* ============================================================
-   FILTER TABS
-============================================================ */
 const FILTERS: { key: DisplayStatus; label: string }[] = [
   { key: "Pending", label: "Pending" },
   { key: "Active", label: "Active" },
   { key: "Completed", label: "Completed" },
 ];
 
-/* ============================================================
-   HELPERS
-============================================================ */
 function formatNaira(amount: number) {
   return `₦${amount.toLocaleString("en-NG")}`;
 }
 
-/* ============================================================
-   HEADER
-============================================================ */
 function DashboardHeader({
   palette,
   themeMode,
@@ -281,9 +254,6 @@ function DashboardHeader({
   );
 }
 
-/* ============================================================
-   TOP TABS
-============================================================ */
 function TopTabsBar({ palette, onNavigate }: { palette: ReturnType<typeof getPalette>; onNavigate: (route: string) => void }) {
   const [pressedKey, setPressedKey] = useState<string>("orders");
   const underlineX = useSharedValue(0);
@@ -343,9 +313,6 @@ function TopTabsBar({ palette, onNavigate }: { palette: ReturnType<typeof getPal
   );
 }
 
-/* ============================================================
-   FILTER PILLS
-============================================================ */
 function FilterPills({
   palette,
   active,
@@ -389,9 +356,6 @@ function FilterPills({
   );
 }
 
-/* ============================================================
-   ORDER CARD
-============================================================ */
 const OrderCard = memo(function OrderCard({
   order,
   palette,
@@ -566,9 +530,6 @@ const OrderCard = memo(function OrderCard({
   );
 });
 
-/* ============================================================
-   EMPTY STATE
-============================================================ */
 function EmptyState({ palette, filter }: { palette: ReturnType<typeof getPalette>; filter: DisplayStatus }) {
   const copy: Record<DisplayStatus, { title: string; icon: keyof typeof Ionicons.glyphMap }> = {
     Pending: { title: "No Pending Orders", icon: "time-outline" },
@@ -590,9 +551,6 @@ function EmptyState({ palette, filter }: { palette: ReturnType<typeof getPalette
   );
 }
 
-/* ============================================================
-   CONFIRM DIALOG
-============================================================ */
 function ConfirmDialog({
   visible,
   palette,
@@ -629,9 +587,6 @@ function ConfirmDialog({
   );
 }
 
-/* ============================================================
-   SUCCESS OVERLAY
-============================================================ */
 function SuccessOverlay({
   visible,
   palette,
@@ -654,9 +609,6 @@ function SuccessOverlay({
   );
 }
 
-/* ============================================================
-   TOAST
-============================================================ */
 function Toast({ message, palette }: { message: string | null; palette: ReturnType<typeof getPalette> }) {
   if (!message) return null;
   return (
@@ -671,15 +623,28 @@ function Toast({ message, palette }: { message: string | null; palette: ReturnTy
 
 /* ============================================================
    TRACK DELIVERY MODAL
+   ------------------------------------------------------------
+   Now includes a Start/Complete Delivery action (it previously
+   only showed the map + details, with no way to actually
+   progress the delivery from inside this modal). Tapping it
+   closes THIS modal before the parent opens ConfirmDialog —
+   ConfirmDialog is a plain absolutely-positioned View, not its
+   own <Modal>, so it would render underneath this native Modal's
+   layer if both tried to be visible at once. Same pattern
+   tasks.tsx already uses for its own details modal.
 ============================================================ */
 function TrackDeliveryModal({
   order,
   palette,
   onClose,
+  onStartDelivery,
+  onCompleteDelivery,
 }: {
   order: DisplayOrder | null;
   palette: ReturnType<typeof getPalette>;
   onClose: () => void;
+  onStartDelivery: (order: DisplayOrder) => void;
+  onCompleteDelivery: (order: DisplayOrder) => void;
 }) {
   const [driverCoords, setDriverCoords] = useState(FALLBACK_LOCATION);
   const [mapReady, setMapReady] = useState(false);
@@ -761,6 +726,37 @@ function TrackDeliveryModal({
                 </View>
               </View>
 
+              {/* Start/Complete Delivery — missing entirely before this.
+                  Gated on subStatus !== "Completed" rather than requiring
+                  status === "Active" specifically: this modal can be
+                  reached via tasks.tsx's "Continue Delivery" link with
+                  ?trackOrderId=, and that auto-open effect doesn't check
+                  status before opening — so relying on "Active" here meant
+                  the button silently vanished for any order whose status
+                  hadn't resolved to that exact bucket. subStatus already
+                  tells us precisely which action (if any) applies. */}
+              {order.subStatus !== "Completed" && (
+                <View style={styles.taskButtonsRow}>
+                  {order.subStatus === "Assigned" ? (
+                    <Pressable
+                      onPress={() => onStartDelivery(order)}
+                      style={[styles.taskButtonPrimary, { backgroundColor: palette.secondary }]}
+                    >
+                      <Ionicons name="play-outline" size={15} color="#FFFFFF" />
+                      <Text style={styles.taskButtonPrimaryText}>Start Delivery</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      onPress={() => onCompleteDelivery(order)}
+                      style={[styles.taskButtonPrimary, { backgroundColor: palette.completed }]}
+                    >
+                      <Ionicons name="checkmark-done-outline" size={15} color="#FFFFFF" />
+                      <Text style={styles.taskButtonPrimaryText}>Complete Delivery</Text>
+                    </Pressable>
+                  )}
+                </View>
+              )}
+
               <Text style={[styles.trackSectionTitle, { color: palette.text }]}>Customer Information</Text>
               <View style={[styles.trackSectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
                 <View style={styles.orderCustomerRow}>
@@ -810,9 +806,6 @@ function TrackDeliveryModal({
   );
 }
 
-/* ============================================================
-   VIEW DETAILS MODAL
-============================================================ */
 function DetailRow({ label, value, palette }: { label: string; value: string; palette: ReturnType<typeof getPalette> }) {
   return (
     <View style={styles.detailRow}>
@@ -879,9 +872,6 @@ function ViewDetailsModal({
   );
 }
 
-/* ============================================================
-   BOTTOM NAVIGATION
-============================================================ */
 function BottomNavItem({
   label,
   icon,
@@ -939,16 +929,12 @@ function BottomNav({
   );
 }
 
-/* ============================================================
-   MAIN ORDERS SCREEN
-============================================================ */
 export default function DriverOrdersScreen() {
   const router = useRouter();
   const { trackOrderId } = useLocalSearchParams<{ trackOrderId?: string }>();
   const { width } = useWindowDimensions();
   const isWideScreen = width >= 720;
 
-  /* Theme */
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [systemScheme, setSystemScheme] = useState<Scheme>((Appearance.getColorScheme() as Scheme) || "light");
 
@@ -981,7 +967,6 @@ export default function DriverOrdersScreen() {
     }
   }, [themeMode]);
 
-  /* Orders State — fetched from the backend, no demo data */
   const [orders, setOrders] = useState<DisplayOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1036,24 +1021,12 @@ export default function DriverOrdersScreen() {
     })();
   }, [loadOrders]);
 
-  // Honors ?trackOrderId= (tasks.tsx's "Continue Delivery" navigates here
-  // with the order's id attached) to auto-open the modal — but ONLY once.
-  //
-  // A ref-based "already opened" guard is NOT enough here: if this screen
-  // ever remounts (tab switch and back, fast refresh, etc.) while
-  // trackOrderId is still sitting in the URL, a fresh component instance
-  // gets a fresh ref starting at null, and the modal reopens all over
-  // again. The real fix is to clear the param out of the URL itself the
-  // moment it's consumed — router.setParams below — so there is nothing
-  // left in the route for any future render/remount to react to.
   useEffect(() => {
     if (!trackOrderId || orders.length === 0) return;
     const match = orders.find((o) => o.id === trackOrderId);
     if (match) {
       setTrackingOrder(match);
     }
-    // Clear it either way (even if no match yet) so a stale/invalid id
-    // doesn't linger in the URL forever either.
     router.setParams({ trackOrderId: undefined });
   }, [trackOrderId, orders]);
 
@@ -1082,7 +1055,6 @@ export default function DriverOrdersScreen() {
     [orders]
   );
 
-  /* Entrance animation */
   const entranceOpacity = useSharedValue(0);
   const entranceTranslate = useSharedValue(16);
   useEffect(() => {
@@ -1094,7 +1066,6 @@ export default function DriverOrdersScreen() {
     transform: [{ translateY: entranceTranslate.value }],
   }));
 
-  /* Handlers */
   const handleTopTabNavigate = useCallback((route: string) => router.push(route as any), [router]);
   const handleBottomNavNavigate = useCallback(
     (route: string) => {
@@ -1145,6 +1116,21 @@ export default function DriverOrdersScreen() {
   }, []);
 
   const handleCompleteRequest = useCallback((order: DisplayOrder) => {
+    setConfirmAction({ type: "complete", order });
+  }, []);
+
+  // Used by TrackDeliveryModal's Start/Complete button — closes the
+  // tracking modal FIRST, then opens ConfirmDialog. ConfirmDialog is a
+  // plain View (not its own <Modal>), so if it tried to show while
+  // TrackDeliveryModal's native Modal is still up, it would render
+  // behind it — invisible, and the button would appear to do nothing.
+  const handleStartFromTrackModal = useCallback((order: DisplayOrder) => {
+    setTrackingOrder(null);
+    setConfirmAction({ type: "start", order });
+  }, []);
+
+  const handleCompleteFromTrackModal = useCallback((order: DisplayOrder) => {
+    setTrackingOrder(null);
     setConfirmAction({ type: "complete", order });
   }, []);
 
@@ -1240,7 +1226,13 @@ export default function DriverOrdersScreen() {
 
       <BottomNav palette={palette} activeKey="orders" onNavigate={handleBottomNavNavigate} />
 
-      <TrackDeliveryModal order={trackingOrder} palette={palette} onClose={() => setTrackingOrder(null)} />
+      <TrackDeliveryModal
+        order={trackingOrder}
+        palette={palette}
+        onClose={() => setTrackingOrder(null)}
+        onStartDelivery={handleStartFromTrackModal}
+        onCompleteDelivery={handleCompleteFromTrackModal}
+      />
       <ViewDetailsModal order={detailsOrder} palette={palette} onClose={() => setDetailsOrder(null)} />
 
       <ConfirmDialog
@@ -1263,9 +1255,6 @@ export default function DriverOrdersScreen() {
   );
 }
 
-/* ============================================================
-   STYLES
-============================================================ */
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   scrollContent: { paddingTop: 16 },
