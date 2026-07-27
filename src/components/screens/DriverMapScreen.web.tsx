@@ -57,6 +57,11 @@ const FALLBACK_LOCATION = { lat: 6.335, lng: 5.6037 };
 const STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
+// Fallback route used when there's nothing to pop back to (direct URL load,
+// page refresh, or a deep link straight into this screen on web) — adjust
+// this to whatever the driver app's actual home/dashboard route is.
+const BACK_FALLBACK_ROUTE = "/driver/dashboard";
+
 /* ============================================================
    MAIN SCREEN (web)
 ============================================================ */
@@ -223,10 +228,18 @@ export default function DriverMapsScreen() {
     mapRef.current.fitBounds(bounds, { padding: 80, animate: true });
   };
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace(BACK_FALLBACK_ROUTE as any);
+    }
+  };
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={["top", "bottom"]}>
       <View style={[styles.headerRow, { borderBottomColor: palette.border }]}>
-        <Pressable onPress={() => router.back()} hitSlop={10} style={[styles.iconButton, { backgroundColor: palette.pillBg }]}>
+        <Pressable onPress={handleBack} hitSlop={10} style={[styles.iconButton, { backgroundColor: palette.pillBg }]}>
           <Ionicons name="arrow-back" size={20} color={palette.text} />
         </Pressable>
         <View style={{ marginLeft: 12 }}>
