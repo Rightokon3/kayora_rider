@@ -1,8 +1,7 @@
-import React from "react";
-import { View, StyleSheet } from "react-native";
+import React, { useEffect, useState } from "react";
+import { View, Text, StyleSheet } from "react-native";
 import MapLibreGL from "@maplibre/maplibre-react-native";
-
-MapLibreGL.setAccessToken(null);
+import { ensureMapLibreReady } from "../utils/mapLibreInit";
 
 const STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -16,6 +15,21 @@ export default function TaskMapPreview({
   longitude: number;
   isDark: boolean;
 }) {
+  const [nativeAvailable, setNativeAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setNativeAvailable(ensureMapLibreReady());
+  }, []);
+
+  if (nativeAvailable === null) return null;
+  if (nativeAvailable === false) {
+    return (
+      <View style={styles.fallback}>
+        <Text style={styles.fallbackText}>Map unavailable in this build.</Text>
+      </View>
+    );
+  }
+
   return (
     <MapLibreGL.MapView
       style={styles.map}
@@ -38,6 +52,8 @@ export default function TaskMapPreview({
 
 const styles = StyleSheet.create({
   map: { flex: 1 },
+  fallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
+  fallbackText: { fontSize: 13, color: "#6B7280", textAlign: "center" },
   pin: {
     width: 20,
     height: 20,

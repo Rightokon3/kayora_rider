@@ -1,8 +1,7 @@
-import React, { useEffect, useRef } from "react";
-import { View, StyleSheet } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { View, Text, StyleSheet } from "react-native";
 import MapLibreGL from "@maplibre/maplibre-react-native";
-
-MapLibreGL.setAccessToken(null);
+import { ensureMapLibreReady } from "../utils/mapLibreInit";
 
 const STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -22,8 +21,13 @@ export default function TrackingMap({
   isDark: boolean;
   onReady?: () => void;
 }) {
+  const [nativeAvailable, setNativeAvailable] = useState<boolean | null>(null);
   const cameraRef = useRef<MapLibreGL.Camera>(null);
   const hasFitOnce = useRef(false);
+
+  useEffect(() => {
+    setNativeAvailable(ensureMapLibreReady());
+  }, []);
 
   // Fit both points in view once on first load; after that, just pan to
   // follow the driver as updates arrive (keeps the destination steady).
@@ -34,6 +38,15 @@ export default function TrackingMap({
       animationDuration: 1000,
     });
   }, [driverLat, driverLng]);
+
+  if (nativeAvailable === null) return null;
+  if (nativeAvailable === false) {
+    return (
+      <View style={styles.fallback}>
+        <Text style={styles.fallbackText}>Map unavailable in this build.</Text>
+      </View>
+    );
+  }
 
   const routeGeoJson = {
     type: "Feature" as const,
@@ -83,6 +96,8 @@ export default function TrackingMap({
 
 const styles = StyleSheet.create({
   map: { flex: 1 },
+  fallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
+  fallbackText: { fontSize: 13, color: "#6B7280", textAlign: "center" },
   driverPin: {
     width: 18,
     height: 18,
